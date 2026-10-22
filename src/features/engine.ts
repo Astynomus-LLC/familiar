@@ -1,0 +1,188 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Discord event tuples have different payload shapes; the registry is the dynamic dispatch boundary. */
+import type { Client, Guild } from 'discord.js';
+import type { Bot, Store } from '../storage/store.js';
+import { features } from './registry.js';
+import {
+  gatewaySettings,
+  type FeatureInstance,
+  type FeatureContext,
+  type Feature,
+} from './types.js';
+export class FeatureEngine {
+  private readonly listeners: [string, (...args: any[]) => void][] = [];
+  private closed = false;
+  private queue = Promise.resolve();
+  constructor(
+    private store: Store,
+    private bot: Bot,
+    private client: Client,
+    private registry: Feature[] = features,
+  ) {
+    for (const name of new Set([
+      ...registry.flatMap((f) => f.events.map((e) => e.name)),
+      'interactionCreate',
+      'messageCreate',
+    ])) {
+      const listener = (...args: any[]) => {
+        void this.dispatch(name, ...args).catch(() =>
+          console.error(`Bot ${this.bot.slug}: feature dispatch failed.`),
+        );
+      };
+      client.on(name, listener);
+      this.listeners.push([name, listener]);
+    }
+    client.on('clientReady', this.sync);
+    client.on('guildCreate', this.sync);
+    store.on('featuresChanged', this.changed);
+  }
+  private changed = (instance: FeatureInstance) => {
+    if (instance.botId === this.bot.id) this.sync();
+  };
+  private sync = () => {
+    this.queue = this.queue
+      .then(() => this.syncCommands())
+      .catch(() =>
+        console.error(
+          `Bot ${this.bot.slug}: feature command synchronization failed.`,
+        ),
+      );
+  };
+  private context(instance: FeatureInstance, guild: Guild): FeatureContext {
+    return {
+      client: this.client,
+      guild,
+      config: instance.config,
+      intents: gatewaySettings.parse(this.bot).intents,
+      logger: (message) =>
+        console.error(
+          `Bot ${this.bot.slug}, guild ${guild.id}, feature ${instance.featureId}: ${message}`,
+        ),
+      active: () =>
+        !this.closed &&
+        this.store
+          .featureInstances(this.bot.id, guild.id)
+          .some(
+            (i) =>
+              i.featureId === instance.featureId &&
+              i.enabled &&
+              JSON.stringify(i.config) === JSON.stringify(instance.config),
+          ),
+    };
+  }
+  async dispatch(name: string, ...args: any[]): Promise<void> {
+    if (this.closed) return;
+    const guild = args.find((arg) => arg?.guild)?.guild as Guild | undefined;
+    if (!guild) return;
+    const intents = gatewaySettings.parse(this.bot).intents;
+    await Promise.all(
+      this.store
+        .featureInstances(this.bot.id, guild.id)
+        .filter((i) => i.enabled)
+        .map(async (instance) => {
+          const feature = this.registry.find(
+            (f) => f.id === instance.featureId,
+          );
+          if (!feature) return;
+          const ctx = this.context(instance, guild);
+          try {
+            for (const event of feature.events)
+              if (
+                event.name === name &&
+                event.intents.every((i) => intents.includes(i))
+              )
+                await event.handle(ctx, ...args);
+            if (
+              name === 'interactionCreate' &&
+              args[0].isChatInputCommand?.()
+            ) {
+              const owned =
+                this.store.setting<
+                  Record<string, { id: string; feature: string }>
+                >(`featureCommands:${this.bot.id}:${guild.id}`) ?? {};
+              const command = feature.slashCommands?.find(
+                (c) =>
+                  c.name === args[0].commandName &&
+                  owned[c.name]?.feature === feature.id &&
+                  owned[c.name]?.id === args[0].commandId,
+              );
+              if (
+                command &&
+                feature.requiredIntents.every((i) => intents.includes(i))
+              )
+                await command.handle(ctx, args[0]);
+            }
+            if (
+              name === 'messageCreate' &&
+              intents.includes('GuildMessages') &&
+              intents.includes('MessageContent') &&
+              !args[0].author?.bot
+            ) {
+              const command = feature.messageCommands?.find(
+                (c) => args[0].content?.split(/\s/)[0] === c.name,
+              );
+              if (
+                command &&
+                feature.requiredIntents.every((i) => intents.includes(i))
+              )
+                await command.handle(ctx, args[0]);
+            }
+          } catch {
+            ctx.logger(
+              'Handler failed. Check configuration and Discord permissions.',
+            );
+          }
+        }),
+    );
+  }
+  private async syncCommands() {
+    if (this.closed || !this.client.isReady()) return;
+    for (const guild of this.client.guilds.cache.values()) {
+      const key = `featureCommands:${this.bot.id}:${guild.id}`;
+      const owned =
+        this.store.setting<Record<string, { id: string; feature: string }>>(
+          key,
+        ) ?? {};
+      const enabled = this.store
+        .featureInstances(this.bot.id, guild.id)
+        .filter((i) => i.enabled);
+      const desired = this.registry
+        .filter((f) => enabled.some((i) => i.featureId === f.id))
+        .flatMap((f) =>
+          (f.slashCommands ?? []).map((c) => ({ ...c, feature: f.id })),
+        );
+      if (!desired.length && !Object.keys(owned).length) continue;
+      const existing = await guild.commands.fetch();
+      for (const [name, command] of Object.entries(owned)) {
+        if (
+          !desired.some((c) => c.name === name && c.feature === command.feature)
+        ) {
+          if (existing.has(command.id)) await guild.commands.delete(command.id);
+          delete owned[name];
+          this.store.setSetting(key, owned);
+        }
+      }
+      for (const command of desired) {
+        if (owned[command.name] && existing.has(owned[command.name].id))
+          continue;
+        if (existing.some((c) => c.name === command.name)) {
+          console.error(`Feature command name collision: ${command.name}`);
+          continue;
+        }
+        const created = await guild.commands.create({
+          name: command.name,
+          description: command.description,
+        });
+        owned[command.name] = { id: created.id, feature: command.feature };
+        this.store.setSetting(key, owned);
+      }
+    }
+  }
+  close() {
+    this.closed = true;
+    for (const [name, listener] of this.listeners)
+      this.client.off(name, listener);
+    this.client.off('clientReady', this.sync);
+    this.client.off('guildCreate', this.sync);
+    this.store.off('featuresChanged', this.changed);
+  }
+}

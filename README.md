@@ -127,3 +127,28 @@ AGPLv3. [LICENSE](LICENSE) is unchanged. Copyright Astynomus LLC.
 
 [Launch checklist](docs/launch.md) tracks publication, the live demo, and directory
 submissions. [Built by Astynomus](https://astynomus.com) — see our other products.
+
+## Autonomous server features
+
+Logging, autorole, and welcome run without an agent connection. In **Bots →
+Servers and features**, enable and configure each feature for each server. New
+servers have no enabled features. Saving to **all servers** writes the validated
+configuration to each current server; it does not create inheritance or affect
+servers joined later. First-time MCP enable calls take the required `config`;
+subsequent `configure_feature` calls patch the stored configuration. The `features`
+tool category is independently toggleable, and all its mutations are audited.
+
+Bot intent checkboxes control the exact gateway intent set. Saving reconnects the
+bot. Enable privileged intents in the Discord developer portal first. Instances
+with missing intents remain visible as degraded; events requiring those intents
+are skipped while other events continue. Existing bots retain the v1 Guilds and
+GuildVoiceStates defaults. Message cache size defaults to 200 messages per channel.
+Logging never fetches deleted content: uncached content and unknown actors are
+reported as unavailable. Audit correlation is best effort and requires Discord
+View Audit Log permission. Autorole also requires Manage Roles and a suitable role
+hierarchy; welcome and logging require access to their configured channels.
+
+Feature manifests live in `src/features`, registered only in `registry.ts`, separate
+from tool categories. SQLite indexes instances by bot and guild. Command ownership
+is persisted per bot and guild; synchronization creates/deletes individual owned
+commands, preserving commands managed through application-command tools.

@@ -1,3 +1,4 @@
+import { gatewaySettings, intentNames } from '../features/types.js';
 import express, { type Express, type ErrorRequestHandler } from 'express';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -39,6 +40,14 @@ export function mountAdmin(
         name: bot.name,
         avatar: bot.avatar,
         categories: bot.categories,
+        ...gatewaySettings.parse(bot),
+        degraded: [
+          ...new Set(store.featureInstances(bot.id).map((i) => i.guildId)),
+        ].flatMap((guildId) =>
+          manager
+            .featureStates(bot, guildId)
+            .filter((f) => f.state === 'degraded'),
+        ),
         ...manager.status(bot.slug),
       })),
       keys: store.keys().map((key) => ({
@@ -54,6 +63,7 @@ export function mountAdmin(
         name,
         description,
       })),
+      intentNames,
       defaultBot: store.setting('defaultBot') ?? null,
       readOnly: store.setting('readOnly') ?? false,
       audit: store.auditEntries(20),
@@ -83,6 +93,65 @@ export function mountAdmin(
     validateCategories(input.categories);
     store.saveBot({ ...bot, categories: input.categories });
     res.json({ ok: true });
+  });
+
+  app.get('/api/admin/bots/:slug/servers', async (req, res) => {
+    const bot = store.bots().find((bot) => bot.slug === req.params.slug);
+    if (!bot) throw new Error('Bot not found.');
+    res.json(
+      (await manager.guilds(bot)).map((guild) => ({
+        ...guild,
+        features: manager.featureStates(bot, guild.id),
+      })),
+    );
+  });
+  app.patch('/api/admin/bots/:slug/gateway', async (req, res) => {
+    const bot = store.bots().find((bot) => bot.slug === req.params.slug);
+    if (!bot) throw new Error('Bot not found.');
+    const input = gatewaySettings.parse(req.body);
+    await manager.updateGateway(bot, input);
+    store.audit({
+      timestamp: new Date().toISOString(),
+      key: auth.person(req)!.id,
+      bot: { slug: bot.slug, name: bot.name },
+      tool: 'configure_gateway',
+      target: bot.slug,
+      result: 'success',
+    });
+    res.json({ ok: true });
+  });
+  app.patch('/api/admin/bots/:slug/features', async (req, res) => {
+    const bot = store.bots().find((bot) => bot.slug === req.params.slug);
+    if (!bot) throw new Error('Bot not found.');
+    const input = z
+      .object({
+        guild: z.string(),
+        featureId: z.string(),
+        config: z.record(z.string(), z.unknown()).optional(),
+        enabled: z.boolean().optional(),
+      })
+      .parse(req.body);
+    let result = 'failed';
+    try {
+      const instances = await manager.configureFeature(
+        bot,
+        input.guild,
+        input.featureId,
+        input.config,
+        input.enabled,
+      );
+      result = 'success';
+      res.json(instances);
+    } finally {
+      store.audit({
+        timestamp: new Date().toISOString(),
+        key: auth.person(req)!.id,
+        bot: { slug: bot.slug, name: bot.name },
+        tool: 'configure_feature',
+        target: `${input.guild}:${input.featureId}`,
+        result,
+      });
+    }
   });
 
   app.get('/api/admin/bots/:slug/affected-keys', (req, res) => {

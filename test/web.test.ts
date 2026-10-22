@@ -298,3 +298,58 @@ test('lost-master OAuth recovery preserves ownership and does not admit a new ow
     await fixture.close();
   }
 });
+
+test('feature admin endpoints share MCP config and expose degraded instances', async () => {
+  const f = await webFixture();
+  const browser = f.browser();
+  try {
+    await browser('/api/setup/verify', 'POST', { code: f.setupCode });
+    await browser('/api/setup/oauth', 'POST', {
+      clientId: '123',
+      clientSecret: 'secret',
+    });
+    await login(browser);
+    await f.manager.save('hello', 'hello-token', ['features']);
+    const { Session } = await import('../src/mcp/session.js');
+    const session = new Session(f.store, f.manager);
+    const enabled = await session.call('set_feature_enabled', {
+      guild: '10',
+      feature_id: 'logging',
+      enabled: true,
+      config: { channelId: '99' },
+    });
+    assert.equal(enabled.isError, undefined);
+    await session.call('configure_feature', {
+      guild: '10',
+      feature_id: 'logging',
+      config: { channelId: '98' },
+    });
+    const guilds = await (
+      await browser('/api/admin/bots/hello/servers')
+    ).json();
+    assert.equal(guilds[0].features[0].config.channelId, '98');
+    assert.equal(guilds[0].features[0].state, 'degraded');
+    const state = await (await browser('/api/admin/state')).json();
+    assert.ok(
+      state.bots[0].degraded[0].missingIntents.includes('GuildMembers'),
+    );
+    assert.equal(
+      (
+        await browser('/api/admin/bots/hello/features', 'PATCH', {
+          guild: '10',
+          featureId: 'logging',
+          enabled: false,
+        })
+      ).status,
+      200,
+    );
+    const status = await session.call('list_features', { guild: '10' });
+    assert.equal(
+      JSON.parse(status.content[0].text).result[0].features[0].enabled,
+      false,
+    );
+    session.close();
+  } finally {
+    await f.close();
+  }
+});

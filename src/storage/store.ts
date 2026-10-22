@@ -1,3 +1,4 @@
+import type { FeatureInstance, GatewaySettings } from '../features/types.js';
 import { DatabaseSync } from 'node:sqlite';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +11,8 @@ export interface Bot {
   avatar: string | null;
   token: string;
   categories: string[];
+  intents?: GatewaySettings['intents'];
+  messageCacheSize?: number;
 }
 
 export interface ApiKey {
@@ -52,6 +55,7 @@ export class Store extends EventEmitter {
       CREATE TABLE IF NOT EXISTS keys (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS feature_instances (botId TEXT NOT NULL, guildId TEXT NOT NULL, featureId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(botId, guildId, featureId));
       CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
     `);
   }
@@ -95,6 +99,11 @@ export class Store extends EventEmitter {
   deleteBot(slug: string): void {
     this.db.exec('BEGIN');
     try {
+      const bot = this.bots().find((bot) => bot.slug === slug);
+      if (bot)
+        this.db
+          .prepare('DELETE FROM feature_instances WHERE botId = ?')
+          .run(bot.id);
       this.db.prepare('DELETE FROM bots WHERE id = ?').run(slug);
       for (const key of this.keys()) {
         if (key.bots)
@@ -111,6 +120,41 @@ export class Store extends EventEmitter {
       throw error;
     }
     this.emit('toolsChanged');
+  }
+
+  featureInstances(botId: string, guildId?: string): FeatureInstance[] {
+    const rows =
+      guildId === undefined
+        ? this.db
+            .prepare('SELECT value FROM feature_instances WHERE botId = ?')
+            .all(botId)
+        : this.db
+            .prepare(
+              'SELECT value FROM feature_instances WHERE botId = ? AND guildId = ?',
+            )
+            .all(botId, guildId);
+    return rows.map((row) => JSON.parse(row.value as string));
+  }
+
+  saveFeatureInstances(instances: FeatureInstance[]): void {
+    this.db.exec('BEGIN');
+    try {
+      const statement = this.db.prepare(
+        'INSERT INTO feature_instances VALUES (?, ?, ?, ?) ON CONFLICT(botId, guildId, featureId) DO UPDATE SET value = excluded.value',
+      );
+      for (const instance of instances)
+        statement.run(
+          instance.botId,
+          instance.guildId,
+          instance.featureId,
+          JSON.stringify(instance),
+        );
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    for (const instance of instances) this.emit('featuresChanged', instance);
   }
 
   createKey(

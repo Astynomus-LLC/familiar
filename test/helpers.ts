@@ -24,6 +24,11 @@ export async function fixture() {
           bot: true,
           avatar: null,
         };
+      if (path.startsWith('/users/@me/guilds'))
+        return [
+          { id: '10', name: 'Server A' },
+          { id: '20', name: 'Server B' },
+        ];
       return { ok: true };
     },
     async login() {

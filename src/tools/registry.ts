@@ -1,3 +1,4 @@
+import { featureTools } from './categories/features.js';
 import { channels } from './categories/channels.js';
 import { threads } from './categories/threads.js';
 import { members } from './categories/members.js';
@@ -20,6 +21,7 @@ import type { Category } from './types.js';
 
 export const categories: Category[] = [
   core,
+  featureTools,
   rawApi,
   messages,
   channels,

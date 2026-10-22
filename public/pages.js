@@ -1,3 +1,4 @@
+import { gatewayForm } from './features.js';
 import {
   escape,
   date,
@@ -30,7 +31,7 @@ export function pageContent(page, state, session, entries = [], people = []) {
 </div>
 </div>
 <section class="panel">
-<h2>Bots</h2>${state.bots
+<h2>Bots</h2>${state.bots.flatMap((bot) => (bot.degraded ?? []).map((f) => `<p class="badge offline">${escape(bot.name)} · ${escape(f.guildId)} · ${escape(f.name)}: ${escape(f.missingIntents.map((i) => `needs ${i}`).join(', '))}</p>`)).join('')}${state.bots
       .map(
         (
           bot,
@@ -44,7 +45,7 @@ export function pageContent(page, state, session, entries = [], people = []) {
 <h2>Recent activity</h2>${auditTable(state.audit)}</section>`;
   else if (page === 'bots')
     return `<h1>Bots</h1>
-<p class="muted">A separate identity and set of capabilities for each bot.</p>${state.bots.map((bot) => botCard(state, bot)).join('')}${botForm()}`;
+<p class="muted">A separate identity and set of capabilities for each bot.</p>${state.bots.map((bot) => botCard(state, bot) + gatewayForm(state, bot)).join('')}${botForm()}`;
   else if (page === 'keys')
     return `<h1>API keys</h1>
 <p class="muted">Give each agent only the bots and capabilities it needs.</p>

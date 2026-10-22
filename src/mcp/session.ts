@@ -136,7 +136,10 @@ export class Session {
       target = Object.entries(args)
         .filter(
           ([name]) =>
-            name.endsWith('_id') || name === 'path' || name === 'code',
+            name.endsWith('_id') ||
+            name === 'path' ||
+            name === 'code' ||
+            name === 'guild',
         )
         .map(
           ([name, value]) =>

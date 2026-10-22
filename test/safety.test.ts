@@ -164,7 +164,7 @@ test('every category exposes valid JSON schemas and unique names', async () => {
   });
   const session = new Session(store, manager);
   const tools = session.list() as { name: string }[];
-  assert.equal(categories.length, 18);
+  assert.equal(categories.length, 19);
   assert.equal(new Set(tools.map((tool) => tool.name)).size, tools.length);
   assert.ok(tools.length > 60);
   session.close();

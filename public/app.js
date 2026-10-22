@@ -1,3 +1,4 @@
+import { serversView, featureConfig } from './features.js';
 import { clientSetup, checkConnection } from './client-setup.js';
 import {
   escape,
@@ -19,6 +20,7 @@ let page = location.hash.slice(1) || 'dashboard';
 let generatedKey;
 let installClient = 'codex';
 let noticeTimer;
+let serverGuilds = [];
 
 async function api(path, method = 'GET', body) {
   const response = await fetch(path, {
@@ -85,6 +87,13 @@ async function render() {
     main.innerHTML = keyResult(generatedKey, installClient);
     return;
   }
+  if (page.startsWith('servers/')) {
+    const bot = state.bots.find((bot) => bot.slug === page.slice(8));
+    if (!bot) throw new Error('Bot not found.');
+    serverGuilds = await api(`/api/admin/bots/${bot.slug}/servers`);
+    main.innerHTML = serversView(bot, serverGuilds);
+    return;
+  }
   const entries = page === 'audit-log' ? await api('/api/admin/audit') : [];
   const people =
     page === 'access' && session.user.role === 'owner'
@@ -120,6 +129,27 @@ async function submit(form) {
       data.getAll('categories');
     notice('Categories saved. Connected agents have been notified.');
     return;
+  }
+  if (kind === 'gateway') {
+    await api(`/api/admin/bots/${form.dataset.slug}/gateway`, 'PATCH', {
+      intents: data.getAll('intents'),
+      messageCacheSize: Number(values.messageCacheSize),
+    });
+    notice('Gateway settings saved. Bot reconnected.');
+  }
+  if (kind === 'feature') {
+    const feature = serverGuilds
+      .find((g) => g.id === form.dataset.guild)
+      .features.find((f) => f.featureId === form.dataset.feature);
+    await api(`/api/admin/bots/${form.dataset.slug}/features`, 'PATCH', {
+      guild: values.scope === 'all' ? 'all' : form.dataset.guild,
+      featureId: feature.featureId,
+      enabled: data.has('enabled'),
+      ...(data.has('enabled') || feature.config
+        ? { config: featureConfig(form, feature.configSchema) }
+        : {}),
+    });
+    notice('Feature saved.');
   }
   if (kind === 'key') {
     const bots = values.scope === 'all' ? null : data.getAll('bots');

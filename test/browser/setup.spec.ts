@@ -147,6 +147,56 @@ test('setup wizard through scoped key and client configuration', async ({
         (tool) => tool.name === 'moderation_ban',
       ),
     ).toBe(false);
+    await page.getByLabel('features', { exact: true }).check();
+    await page.getByRole('button', { name: 'Save categories' }).click();
+    await expect
+      .poll(async () =>
+        (await client.listTools()).tools.some(
+          (t) => t.name === 'list_features',
+        ),
+      )
+      .toBe(true);
+    const enabled = await client.callTool({
+      name: 'set_feature_enabled',
+      arguments: {
+        guild: '10',
+        feature_id: 'logging',
+        enabled: true,
+        config: { channelId: '99' },
+      },
+    });
+    expect(enabled.isError).toBeFalsy();
+    await client.callTool({
+      name: 'configure_feature',
+      arguments: {
+        guild: '10',
+        feature_id: 'logging',
+        config: { channelId: '98' },
+      },
+    });
+    await page.getByRole('link', { name: 'Servers and features →' }).click();
+    await page.getByText('Server A (10)', { exact: true }).click();
+    const logging = page.locator(
+      'form[data-guild="10"][data-feature="logging"]',
+    );
+    await expect(logging.getByLabel('channelId', { exact: true })).toHaveValue(
+      '98',
+    );
+    await expect(page.locator('details').first()).toContainText(
+      'needs GuildMembers',
+    );
+    await logging.getByLabel('Enabled', { exact: true }).uncheck();
+    await logging.getByRole('button', { name: 'Save feature' }).click();
+    await expect
+      .poll(async () => {
+        const result = await client.callTool({
+          name: 'get_feature_config',
+          arguments: { guild: '10', feature_id: 'logging' },
+        });
+        return JSON.parse((result.content as { text: string }[])[0].text).result
+          .enabled;
+      })
+      .toBe(false);
     const added = await page.request.post('/api/admin/bots', {
       headers: { Origin: 'http://localhost:3210' },
       data: { slug: 'other', token: 'other-token', categories: ['messages'] },
