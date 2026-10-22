@@ -12,6 +12,45 @@ export const moderation: Category = {
   name: 'moderation',
   description: 'Bans, kicks, warnings, timeouts, and pruning',
   tools: [
+    ...(
+      [
+        [
+          'purge_messages',
+          'purge',
+          z.object({
+            channel: id,
+            count: z.number().int().min(1).max(500),
+            member: id.optional(),
+            reason: z.string().max(1000).optional(),
+          }),
+        ],
+        [
+          'lock_channel',
+          'lock',
+          z.object({ channel: id, reason: z.string().max(1000).optional() }),
+        ],
+        ['unlock_channel', 'unlock', z.object({ channel: id })],
+        [
+          'set_slowmode',
+          'slowmode',
+          z.object({
+            channel: id,
+            seconds: z.number().int().min(0).max(21600),
+          }),
+        ],
+      ] as const
+    ).map(([name, action, schema]) => ({
+      name,
+      description: `${action} in a guild channel. Purge inspects up to count recent messages, skipping messages older than 14 days.`,
+      schema,
+      mutating: true,
+      destructive: action === 'purge',
+      execute: (
+        { bot, manager, actorLabel }: import('../types.js').ToolContext,
+        a: Record<string, unknown>,
+      ) =>
+        manager.moderateChannel(bot, String(a.channel), action, actorLabel, a),
+    })),
     restTool({
       name: 'ban_member',
       description: 'Ban a member. The reason is recorded in the server modlog.',

@@ -292,7 +292,7 @@ export async function logModeration(
     await channel.send({
       embeds: [
         embed(
-          `Auto Moderation · ${String(event.action)}`,
+          `${String(event.actor).startsWith('automod:') ? 'Auto Moderation' : 'Moderation'} · ${String(event.action)}`,
           Object.entries(event)
             .filter(([key]) =>
               [
@@ -303,6 +303,7 @@ export async function logModeration(
                 'feature',
                 'matched',
                 'jump',
+                'result',
               ].includes(key),
             )
             .map(([name, value]) => ({ name, value: clip(value) })),

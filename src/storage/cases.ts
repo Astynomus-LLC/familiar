@@ -1,5 +1,12 @@
 export type ModAction =
-  'warn' | 'kick' | 'ban' | 'unban' | 'timeout' | 'untimeout' | 'automod';
+  | 'purge'
+  | 'warn'
+  | 'kick'
+  | 'ban'
+  | 'unban'
+  | 'timeout'
+  | 'untimeout'
+  | 'automod';
 export interface ModCase {
   case_number: number;
   bot_id: string;

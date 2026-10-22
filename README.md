@@ -169,6 +169,27 @@ grant those roles command visibility when needed. The bot and moderator must
 outrank the subject. Timeout durations use `s`, `m`, `h`, or `d`, up to 28 days;
 `/ban delete-messages` specifies seconds of history to delete, up to seven days.
 
+Channel commands include `/purge count [member] [channel]`, `/lock [channel]
+[reason]`, `/unlock [channel]`, and `/slowmode seconds [channel]`. Purge inspects
+up to 500 recent messages, skips messages at least 14 days old, deletes in batches
+of at most 100, and reports the actual deleted count. A member filter creates a
+`purge` case; a channel-wide purge does not. Slowmode accepts 0–21600 seconds
+(0 turns it off). All confirmations and errors are ephemeral.
+
+These commands require Manage Messages (purge) or Manage Channels, including in
+the target channel at runtime. The bot additionally needs View Channel and Read
+Message History for purge, and Manage Roles to edit lock overwrites. Lock saves
+the complete prior @everyone overwrite in SQLite per bot, server, and channel;
+unlock restores it exactly, removing the overwrite if none existed. Familiar
+refuses to unlock channels without its own saved lock state.
+
+The moderation tool category provides matching `purge_messages(channel, count,
+member?, reason?)`, `lock_channel(channel, reason?)`, `unlock_channel(channel)`,
+and `set_slowmode(channel, seconds)` tools using channel IDs. Purge uses the
+existing destructive-action confirmation flow. Member purge cases identify the
+actor as `agent:<key label>`; all four operations emit moderation logging events
+and write audit entries.
+
 Moderation cases are stored in `mod_cases`, numbered per server across bots.
 Automod warnings and human warnings contribute to that server's active warn count;
 configured thresholds produce separate escalation cases. Voiding a case preserves

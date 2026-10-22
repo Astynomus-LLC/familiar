@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { PermissionFlagsBits as P } from 'discord.js';
+import { Collection, PermissionFlagsBits as P } from 'discord.js';
 import { Store } from '../src/storage/store.js';
 import { FeatureEngine } from '../src/features/engine.js';
 import { moderationFeature } from '../src/features/moderation.js';
@@ -117,18 +117,22 @@ function setup(contentIntent = true) {
       user: { id: '7' },
       memberPermissions: { has: () => permitted },
       member: { roles: [] },
+      channelId: '50',
       commandName: name,
       commandId: name,
       isChatInputCommand: () => true,
       options: {
-        getUser: () => user,
+        getChannel: () => opts.channel ?? null,
+        getUser: () => (name === 'purge' ? (opts.member ? user : null) : user),
         getString: (key: string) => opts[key] ?? 'Testing reason',
         getInteger: (key: string) => opts[key] ?? null,
       },
       reply: async (body: any) => {
         calls.push(['reply', body]);
       },
-      deferReply: async () => {},
+      deferReply: async (body: any) => {
+        calls.push(['defer', body]);
+      },
       editReply: async (body: any) => {
         calls.push(['reply', body]);
         return {};
@@ -366,6 +370,10 @@ test('command registration definitions have exact options and permission default
     timeout: ['member', 'duration', 'reason'],
     unban: ['user-id', 'reason'],
     untimeout: ['member'],
+    purge: ['count', 'member', 'channel'],
+    lock: ['channel', 'reason'],
+    unlock: ['channel'],
+    slowmode: ['seconds', 'channel'],
   }))
     assert.deepEqual(
       moderationFeature
@@ -569,5 +577,267 @@ test('agent warnings share notifications and escalations and respect disabled mo
       f.store.close();
       discord.close();
     }
+  }
+});
+
+function channelSetup() {
+  const f = setup();
+  let overwrite: any = null;
+  let messages: any[] = [];
+  const channel: any = {
+    id: '50',
+    guild: f.guild,
+    permissionsFor: () => ({ has: () => true }),
+    permissionOverwrites: {
+      cache: new Map(),
+      delete: async () => {
+        overwrite = null;
+        f.calls.push(['overwrite-delete']);
+      },
+    },
+    messages: {
+      fetch: async ({ limit, before }: any) => {
+        const start = before
+          ? messages.findIndex((m) => m.id === before) + 1
+          : 0;
+        return new Collection(
+          messages.slice(start, start + limit).map((m) => [m.id, m]),
+        );
+      },
+    },
+    bulkDelete: async (selected: any) => {
+      f.calls.push(['bulk', [...selected.keys()]]);
+      return selected;
+    },
+    setRateLimitPerUser: async (seconds: number) => {
+      f.calls.push(['slowmode', seconds]);
+    },
+  };
+  f.guild.channels.fetch = async () => channel;
+  f.client.channels = { fetch: async () => channel };
+  f.client.rest = {
+    put: async (_path: string, { body }: any) => {
+      overwrite = body;
+      f.calls.push(['overwrite', body]);
+    },
+  };
+  return {
+    ...f,
+    channel,
+    overwrite: () => overwrite,
+    messages: (n: number) => {
+      messages = Array.from({ length: n }, (_, i) => ({
+        id: String(1000 - i),
+        author: { id: i % 2 ? '43' : '42' },
+        createdTimestamp: Date.now() - 1000,
+      }));
+      return messages;
+    },
+  };
+}
+
+test('purge chunks recent messages, reports actual deletion, and writes only targeted cases', async () => {
+  const f = channelSetup();
+  try {
+    f.messages(150)[149].createdTimestamp = Date.now() - 15 * 86400000;
+    await f.command('purge', { count: 150 });
+    assert.deepEqual(
+      f.calls.filter((c) => c[0] === 'bulk').map((c) => c[1].length),
+      [100, 49],
+    );
+    assert.match(f.calls.at(-1)[1].content, /149/);
+    assert.equal(f.calls.find((c) => c[0] === 'defer')[1].ephemeral, true);
+    assert.equal(f.store.modCases('10').length, 0);
+    assert.equal(f.calls.filter((c) => c[0] === 'hook').length, 1);
+    f.messages(20);
+    await f.command('purge', { count: 20, member: true });
+    assert.equal(f.store.modCases('10')[0].action, 'purge');
+    assert.equal(f.store.modCases('10')[0].actor, '7');
+    assert.equal(f.store.modCases('10')[0].user_id, '42');
+    assert.equal(f.store.modCases('10')[0].metadata.deleted, '10');
+  } finally {
+    f.close();
+  }
+});
+
+test('lock restores exact overwrite or removes it; unknown unlock and duplicate lock do not mutate', async () => {
+  for (const custom of [true, false]) {
+    const f = channelSetup();
+    try {
+      const prior = {
+        allow: (P.SendMessages | P.AttachFiles).toString(),
+        deny: P.AddReactions.toString(),
+        type: 0,
+      };
+      if (custom)
+        f.channel.permissionOverwrites.cache.set('10', {
+          allow: { bitfield: BigInt(prior.allow) },
+          deny: { bitfield: BigInt(prior.deny), has: () => false },
+          type: 0,
+        });
+      await f.command('unlock');
+      assert.match(f.calls.at(-1)[1].content, /did not lock/);
+      assert.equal(
+        f.calls.filter((c) => c[0].startsWith('overwrite')).length,
+        0,
+      );
+      await f.command('lock');
+      await f.command('lock');
+      assert.match(f.calls.at(-1)[1].content, /already locked/);
+      assert.equal(f.calls.filter((c) => c[0] === 'overwrite').length, 1);
+      await f.command('unlock');
+      assert.deepEqual(f.overwrite(), custom ? prior : null);
+      assert.equal(f.store.setting('moderationLock:1:10:50'), null);
+      assert.equal(f.calls.filter((c) => c[0] === 'hook').length, 2);
+      assert.equal(f.store.modCases('10').length, 0);
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test('slowmode and channel permission failures are ephemeral and do not mutate', async () => {
+  const f = channelSetup();
+  try {
+    await f.command('slowmode', { seconds: 0 });
+    assert.match(f.calls.at(-1)[1].content, /off/);
+    await f.command('slowmode', { seconds: 300 });
+    assert.match(f.calls.at(-1)[1].content, /5m/);
+    assert.deepEqual(
+      f.calls.filter((c) => c[0] === 'slowmode').map((c) => c[1]),
+      [0, 300],
+    );
+    f.calls.length = 0;
+    for (const name of ['purge', 'lock', 'unlock', 'slowmode'])
+      await f.command(name, {}, false);
+    assert.ok(f.calls.every((c) => c[0] === 'reply' && c[1].ephemeral));
+    f.calls.length = 0;
+    f.channel.permissionsFor = () => ({ has: () => false });
+    await f.command('lock');
+    assert.match(f.calls.at(-1)[1].content, /permission/);
+    assert.equal(f.store.setting('moderationLock:1:10:50'), undefined);
+    assert.equal(f.store.modCases('10').length, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test('MCP channel moderation shares cases, lock restoration, validation and permission checks', async () => {
+  const d = channelSetup();
+  const f = await fixture(d.client);
+  const bot = f.store.bots()[0];
+  f.store.saveBot({ ...bot, categories: ['moderation'] });
+  const { key } = f.store.createKey({
+    label: 'Channel agent',
+    bots: [bot.slug],
+    readOnly: false,
+    categories: null,
+  });
+  const session = new Session(f.store, f.manager, key.id);
+  try {
+    d.messages(20);
+    for (const [name, args] of [
+      [
+        'purge_messages',
+        { channel: '50', count: 20, member: '42', reason: 'Cleanup' },
+      ],
+      ['lock_channel', { channel: '50', reason: 'Quiet' }],
+      ['unlock_channel', { channel: '50' }],
+      ['set_slowmode', { channel: '50', seconds: 300 }],
+    ] as const) {
+      let result = await session.call(name, args);
+      const pending = JSON.parse(result.content[0].text).result;
+      if (pending.confirmation_required)
+        result = await session.call(name, {
+          ...args,
+          confirmation: pending.code,
+        });
+      assert.ok(!result.isError, JSON.stringify(result));
+    }
+    assert.equal(f.store.modCases('10')[0].actor, 'agent:Channel agent');
+    assert.equal(f.store.modCases('10')[0].action, 'purge');
+    assert.equal(d.overwrite(), null);
+    assert.equal(
+      (await session.call('purge_messages', { channel: '50', count: 501 }))
+        .isError,
+      true,
+    );
+    assert.equal(
+      (await session.call('set_slowmode', { channel: '50', seconds: 21601 }))
+        .isError,
+      true,
+    );
+    d.calls.length = 0;
+    d.channel.permissionsFor = () => ({ has: () => false });
+    for (const name of [
+      'purge_messages',
+      'lock_channel',
+      'unlock_channel',
+      'set_slowmode',
+    ]) {
+      const args = { channel: '50', count: 20, seconds: 0 };
+      let result = await session.call(name, args);
+      const pending = JSON.parse(result.content[0].text).result;
+      if (pending.confirmation_required)
+        result = await session.call(name, {
+          ...args,
+          confirmation: pending.code,
+        });
+      assert.equal(result.isError, true);
+    }
+    assert.equal(d.calls.length, 0);
+    assert.equal(f.store.modCases('10').length, 1);
+  } finally {
+    session.close();
+    f.manager.close();
+    f.store.close();
+    d.close();
+  }
+});
+
+test('lock rejection clears state, ambiguous failure preserves recovery, and failed unlock retains state', async () => {
+  const f = channelSetup();
+  try {
+    f.client.rest.put = async () => {
+      throw Object.assign(new Error('Missing Permissions'), { code: 50013 });
+    };
+    await f.command('lock');
+    assert.equal(f.store.setting('moderationLock:1:10:50'), null);
+    assert.equal(f.calls.filter((c) => c[0] === 'hook').length, 0);
+    f.client.rest.put = async () => {
+      throw new Error('Network timeout');
+    };
+    await f.command('lock');
+    assert.deepEqual(f.store.setting('moderationLock:1:10:50'), {
+      overwrite: null,
+    });
+    f.channel.permissionOverwrites.delete = async () => {
+      throw new Error('Network timeout');
+    };
+    await f.command('unlock');
+    assert.deepEqual(f.store.setting('moderationLock:1:10:50'), {
+      overwrite: null,
+    });
+    assert.equal(f.store.modCases('10').length, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test('purge counts actual results and records partial completion when a later batch fails', async () => {
+  const f = channelSetup();
+  try {
+    f.messages(150);
+    let calls = 0;
+    f.channel.bulkDelete = async (messages: any) => {
+      if (++calls === 2) throw new Error('Discord unavailable');
+      return new Collection([...messages].slice(0, 48));
+    };
+    await f.command('purge', { count: 150, member: true });
+    assert.match(f.calls.at(-1)[1].content, /48 messages.*failed/);
+    assert.equal(f.store.modCases('10')[0].metadata.deleted, '48');
+    assert.equal(f.calls.filter((c) => c[0] === 'hook').length, 1);
+  } finally {
+    f.close();
   }
 });

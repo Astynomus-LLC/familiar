@@ -1,3 +1,5 @@
+import { channelPermissions } from './channel-permissions.js';
+import { moderateChannel, type ChannelAction } from './channel-moderation.js';
 /* eslint-disable @typescript-eslint/no-explicit-any -- Discord interaction payload boundary. */
 import { z } from 'zod';
 import {
@@ -77,6 +79,7 @@ export const moderationModule: Module = {
   },
 };
 const permissions: Record<string, bigint> = {
+  ...channelPermissions,
   ban: P.BanMembers,
   unban: P.BanMembers,
   kick: P.KickMembers,
@@ -220,51 +223,85 @@ export const moderationFeature: Feature = {
   events: [],
   slashCommands: Object.keys(permissions).map((name) => ({
     name,
-    description: `${name === 'modlogs' ? 'View moderation history' : name === 'case' ? 'View a case' : name === 'voidcase' ? 'Void a case' : `${name} a member`} in this server`,
+    description: `${name in channelPermissions ? `${name} a channel` : name === 'modlogs' ? 'View moderation history' : name === 'case' ? 'View a case' : name === 'voidcase' ? 'Void a case' : `${name} a member`} in this server`,
     defaultMemberPermissions: permissions[name],
     options:
-      name === 'case' || name === 'voidcase'
-        ? [caseOption]
-        : name === 'unban'
-          ? [
-              {
-                type: O.String,
-                name: 'user-id',
-                description: 'Banned user ID',
-                required: true,
-              },
-              reasonOption,
-            ]
-          : name === 'modlogs' || name === 'untimeout'
-            ? [userOption]
-            : name === 'timeout'
+      name in channelPermissions
+        ? [
+            ...(name === 'purge'
               ? [
-                  userOption,
                   {
-                    type: O.String,
-                    name: 'duration',
-                    description:
-                      'Duration such as 30m, 1h, or 7d (maximum 28d)',
+                    type: O.Integer as const,
+                    name: 'count',
+                    description: 'Recent messages to inspect (maximum 500)',
                     required: true,
+                    minValue: 1,
+                    maxValue: 500,
                   },
-                  reasonOption,
+                  { ...userOption, required: false },
                 ]
-              : [
-                  userOption,
-                  reasonOption,
-                  ...(name === 'ban'
-                    ? [
-                        {
-                          type: O.Integer as const,
-                          name: 'delete-messages',
-                          description:
-                            'Seconds of message history to delete (0–604800)',
-                          minValue: 0,
-                          maxValue: 604800,
-                        },
-                      ]
-                    : []),
-                ],
+              : []),
+            ...(name === 'slowmode'
+              ? [
+                  {
+                    type: O.Integer as const,
+                    name: 'seconds',
+                    description: 'Slowmode seconds (0 = off)',
+                    required: true,
+                    minValue: 0,
+                    maxValue: 21600,
+                  },
+                ]
+              : []),
+            {
+              type: O.Channel as const,
+              name: 'channel',
+              description: 'Channel (defaults to current)',
+            },
+            ...(name === 'lock' ? [{ ...reasonOption, required: false }] : []),
+          ]
+        : name === 'case' || name === 'voidcase'
+          ? [caseOption]
+          : name === 'unban'
+            ? [
+                {
+                  type: O.String,
+                  name: 'user-id',
+                  description: 'Banned user ID',
+                  required: true,
+                },
+                reasonOption,
+              ]
+            : name === 'modlogs' || name === 'untimeout'
+              ? [userOption]
+              : name === 'timeout'
+                ? [
+                    userOption,
+                    {
+                      type: O.String,
+                      name: 'duration',
+                      description:
+                        'Duration such as 30m, 1h, or 7d (maximum 28d)',
+                      required: true,
+                    },
+                    reasonOption,
+                  ]
+                : [
+                    userOption,
+                    reasonOption,
+                    ...(name === 'ban'
+                      ? [
+                          {
+                            type: O.Integer as const,
+                            name: 'delete-messages',
+                            description:
+                              'Seconds of message history to delete (0–604800)',
+                            minValue: 0,
+                            maxValue: 604800,
+                          },
+                        ]
+                      : []),
+                  ],
     async handle(ctx, i) {
       const config = moderationModule.configSchema.parse(ctx.config);
       if (!allowed(i, config, name)) {
@@ -278,6 +315,32 @@ export const moderationFeature: Feature = {
       await i.deferReply({ ephemeral: true });
       try {
         if (!ctx.active()) throw new Error('Moderation is disabled.');
+        if (name in channelPermissions) {
+          const channel = await ctx.guild.channels.fetch(
+            i.options.getChannel('channel')?.id ?? i.channelId,
+            { force: true },
+          );
+          if (!channel || !('permissionOverwrites' in channel))
+            throw new Error('Select a supported guild channel.');
+          const result = await moderateChannel(
+            ctx,
+            channel,
+            name as ChannelAction,
+            i.user.id,
+            {
+              count: i.options.getInteger('count') ?? undefined,
+              member: i.options.getUser('member')?.id,
+              reason: i.options.getString('reason') ?? undefined,
+              seconds: i.options.getInteger('seconds') ?? undefined,
+            },
+            i.user.id,
+          );
+          await i.editReply({
+            content: result.message,
+            allowedMentions: { parse: [] },
+          });
+          return;
+        }
         if (name === 'case' || name === 'voidcase') {
           const number = i.options.getInteger('case-number', true);
           const entry =

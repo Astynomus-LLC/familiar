@@ -1,3 +1,7 @@
+import {
+  moderateChannel,
+  type ChannelAction,
+} from '../features/channel-moderation.js';
 import type { ModAction, ModCase } from '../storage/cases.js';
 import { escalate, moderationModule, notify } from '../features/moderation.js';
 import { duration, publishModeration } from '../features/moderation-service.js';
@@ -437,6 +441,49 @@ export class BotManager {
     } catch {
       /* The action and case succeeded even when gateway logging is unavailable. */
     }
+  }
+
+  async moderateChannel(
+    bot: Bot,
+    channelId: string,
+    action: ChannelAction,
+    label: string,
+    options: {
+      count?: number;
+      member?: string;
+      reason?: string;
+      seconds?: number;
+    },
+  ) {
+    const client = this.connections.get(bot.slug)?.client;
+    if (!client)
+      throw new Error('Moderation requires a connected Discord client.');
+    const channel = await client.channels.fetch(channelId, { force: true });
+    if (
+      !channel ||
+      !('guild' in channel) ||
+      !('permissionOverwrites' in channel)
+    )
+      throw new Error('Select a guild channel.');
+    const guild = channel.guild;
+    return moderateChannel(
+      {
+        store: this.store,
+        bot,
+        client,
+        guild,
+        config: {},
+        enabledFeatures: [],
+        intents: gatewaySettings.parse(bot).intents,
+        active: () =>
+          this.store.moduleInstance(bot.id, guild.id, 'moderation').enabled,
+        logger: () => {},
+      },
+      channel,
+      action,
+      `agent:${label}`,
+      options,
+    );
   }
 
   async warnMember(
