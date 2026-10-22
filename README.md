@@ -30,15 +30,15 @@ settings live in the environment; everything else is configured in the UI.
 **Laptop / stdio (Node 24+):**
 
 ```sh
-MASTER_SECRET='<your generated secret>' npx @astynomus/discord-mcp --stdio
+MASTER_SECRET='<your generated secret>' npx @astynomus/familiar --stdio
 ```
 
 The UI is at `http://localhost:3000`; the database is in `./data`. Stdio trusts the
 local process and needs no API key. HTTP MCP at `/mcp` requires a scoped bearer key.
 Use one persistent working directory and one process per instance.
 
-The npm package is `@astynomus/discord-mcp`; the image is
-`ghcr.io/astynomus/familiar`. These install commands require the first public
+The npm package is `@astynomus/familiar`; the image is
+`ghcr.io/astynomus-llc/familiar`. These install commands require the first public
 release. Until then, use `npm ci && npm run build && npm start` from this checkout,
 or `docker compose up --build -d`.
 

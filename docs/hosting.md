@@ -31,7 +31,7 @@ certificate state is persisted in its own volumes. The app runs as the unprivile
 `node` user; its SQLite file lives at `/data/familiar.sqlite`. Configure one app
 replica per database. MCP sessions and web login sessions live in that process.
 
-The image is `ghcr.io/astynomus/familiar:latest`. Before the first published release,
+The image is `ghcr.io/astynomus-llc/familiar:latest`. Before the first published release,
 use `docker compose up --build -d` from a checkout. No bot token is required to boot
 or open the setup wizard. A valid Discord application and token are needed to
 complete real setup.
@@ -65,7 +65,7 @@ Requires Node 24 or newer. From a persistent working directory:
 
 ```sh
 export MASTER_SECRET='<your generated secret>'
-npx @astynomus/discord-mcp --stdio
+npx @astynomus/familiar --stdio
 ```
 
 The SQLite file lives in `./data/familiar.sqlite`, relative to the working directory.
@@ -82,7 +82,7 @@ For clients that need a command configuration:
   "mcpServers": {
     "familiar": {
       "command": "npx",
-      "args": ["-y", "@astynomus/discord-mcp", "--stdio"],
+      "args": ["-y", "@astynomus/familiar", "--stdio"],
       "env": { "MASTER_SECRET": "<your generated secret>" }
     }
   }
@@ -105,9 +105,8 @@ in the Discord developer portal.
 
 ## Release namespace
 
-The release workflow publishes `ghcr.io/astynomus/familiar`. The checkout's remote
-currently belongs to `Astynomus-LLC`. The workflow token must be authorized to publish
-under `astynomus`: move the repo to the intended namespace or configure the
-`GHCR_PUBLISH_TOKEN` repository secret with the required package access. The normal
-repository `GITHUB_TOKEN` is used when no override is set. Publication and public
-package visibility must be verified by the maintainer before announcing installs.
+The release workflow publishes `ghcr.io/astynomus-llc/familiar` under the
+`Astynomus-LLC` organization that owns the repository. It authenticates with
+`github.actor` and the built-in `GITHUB_TOKEN`, using the workflow's `packages: write`
+permission. Publication and public package visibility must be verified by the
+maintainer before announcing installs.

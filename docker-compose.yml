@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/astynomus/familiar:latest
+    image: ghcr.io/astynomus-llc/familiar:latest
     build: .
     restart: unless-stopped
     environment:
