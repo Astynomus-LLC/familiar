@@ -190,7 +190,7 @@ export const loggingModule: Module = {
     ignoredChannelIds: {
       type: 'channels',
       label: 'Ignored channels',
-      help: 'Do not log activity from these channels.',
+      help: 'Add channels to exclude from logging. Only the selected channels are ignored.',
     },
     includeContent: {
       type: 'toggle',

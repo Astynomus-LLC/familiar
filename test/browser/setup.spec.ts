@@ -127,6 +127,44 @@ test('setup wizard through scoped key and client configuration', async ({
     .filter({ has: page.getByRole('heading', { name: 'hello', exact: true }) })
     .click();
   await expect(page.getByLabel('moderation', { exact: true })).toBeChecked();
+  // Keep the shell intact while loading, and ignore a slower, abandoned route.
+  let releaseServers!: () => void;
+  let serversHeld!: () => void;
+  let serversFinished!: () => void;
+  const holdServers = new Promise<void>((resolve) => {
+    releaseServers = resolve;
+  });
+  const heldServers = new Promise<void>((resolve) => {
+    serversHeld = resolve;
+  });
+  const finishedServers = new Promise<void>((resolve) => {
+    serversFinished = resolve;
+  });
+  await page.route('**/api/admin/bots/hello-bot/servers', async (route) => {
+    const response = await route.fetch();
+    serversHeld();
+    await holdServers;
+    await route.fulfill({ response });
+    serversFinished();
+  });
+  await page.getByRole('link', { name: 'Servers', exact: true }).click();
+  await heldServers;
+  await expect(
+    page.locator('#nav').getByRole('link', { name: 'Bots', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel('moderation', { exact: true })).toBeChecked();
+  await page.getByRole('link', { name: 'Intents', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Intents · hello' }),
+  ).toBeVisible();
+  releaseServers();
+  await finishedServers;
+  await page.unroute('**/api/admin/bots/hello-bot/servers');
+  await expect(
+    page.getByRole('heading', { name: 'Intents · hello' }),
+  ).toBeVisible();
+  await expect(page.locator('#main')).not.toHaveAttribute('aria-busy');
+  await page.getByRole('link', { name: 'MCP Tools', exact: true }).click();
   const messagesCategory = page
     .locator('.tool-category')
     .filter({ has: page.getByLabel('messages', { exact: true }) });
@@ -224,6 +262,24 @@ test('setup wizard through scoped key and client configuration', async ({
       '98',
     );
     await page.getByLabel('Log channel', { exact: false }).selectOption('99');
+    const ignored = page.locator('.multi-picker').filter({
+      has: page.getByRole('combobox', {
+        name: 'Ignored channels',
+        exact: true,
+      }),
+    });
+    await expect(ignored).toContainText(
+      'No channels selected. No channels are ignored.',
+    );
+    await ignored.getByRole('combobox').selectOption('98');
+    await ignored.getByRole('combobox').selectOption('99');
+    await expect(ignored.locator('.selection-pill')).toHaveCount(2);
+    await ignored
+      .getByRole('button', { name: 'Remove # activity · Text', exact: true })
+      .click();
+    await expect(ignored.locator('.selection-pill')).toHaveCount(1);
+    await expect(ignored.getByRole('combobox')).toHaveValue('');
+
     await page
       .locator('form[data-form="module"]')
       .getByRole('button', { name: 'Save settings' })
@@ -231,6 +287,25 @@ test('setup wizard through scoped key and client configuration', async ({
     await expect(page.getByLabel('Log channel', { exact: false })).toHaveValue(
       '99',
     );
+    await page.reload();
+    await expect(
+      ignored.getByRole('button', {
+        name: 'Remove # logs · Text',
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(ignored.locator('input[type="hidden"]')).toHaveValue('98');
+    await ignored
+      .getByRole('button', { name: 'Remove # logs · Text', exact: true })
+      .click();
+    await expect(ignored).toContainText(
+      'No channels selected. No channels are ignored.',
+    );
+    await page
+      .locator('form[data-form="module"]')
+      .getByRole('button', { name: 'Save settings' })
+      .click();
+    await expect(page.locator('#main')).not.toHaveAttribute('aria-busy');
     await page
       .getByRole('switch', { name: 'Message deletes enabled', exact: true })
       .click();
@@ -285,9 +360,23 @@ test('setup wizard through scoped key and client configuration', async ({
       .getByRole('link', { name: 'Members', exact: true })
       .click();
     await page.getByText('Configure Autorole', { exact: true }).click();
-    await page
-      .getByLabel('Assigned roles', { exact: false })
-      .selectOption('88');
+    const roles = page.locator('.multi-picker').filter({
+      has: page.getByRole('combobox', {
+        name: 'Assigned roles',
+        exact: true,
+      }),
+    });
+    await expect(roles).toContainText(
+      'No roles selected. No roles will be assigned.',
+    );
+    await roles.getByRole('combobox').selectOption('88');
+    await roles.getByRole('combobox').selectOption('89');
+    await expect(roles.locator('.selection-pill')).toHaveCount(2);
+    await roles
+      .getByRole('button', { name: 'Remove Helper', exact: true })
+      .click();
+    await expect(roles.locator('.selection-pill')).toHaveCount(1);
+
     await page
       .getByRole('switch', { name: 'Autorole enabled', exact: true })
       .click();
@@ -296,8 +385,10 @@ test('setup wizard through scoped key and client configuration', async ({
     ).toBeChecked();
     await page.reload();
     await expect(
-      page.getByLabel('Assigned roles', { exact: false }),
-    ).toHaveValues(['88']);
+      roles.getByRole('button', { name: 'Remove Member', exact: true }),
+    ).toBeVisible();
+    await expect(roles.locator('input[type="hidden"]')).toHaveValue('88');
+    await expect(roles.getByRole('combobox')).toHaveValue('');
     await page
       .getByRole('combobox', { name: 'Server', exact: true })
       .selectOption('#bots/hello-bot/servers/20/members');

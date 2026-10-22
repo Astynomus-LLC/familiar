@@ -9,7 +9,7 @@ export const autorole: Feature = {
     roleIds: {
       type: 'roles',
       label: 'Assigned roles',
-      help: 'Roles to give new members. Place the bot’s role above these roles.',
+      help: 'Add each role to assign to new members. Only the selected roles are assigned. Place the bot’s role above these roles.',
     },
     skipBots: {
       type: 'toggle',

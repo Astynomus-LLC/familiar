@@ -418,12 +418,7 @@ footer a {
 .suspended .switch[aria-checked='true'] {
   background: #747c73;
 }
-.role-colors {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 8px;
-}
+
 label small {
   display: block;
   margin-top: 6px;
@@ -496,4 +491,56 @@ textarea {
 .tool-list p {
   margin: 8px 0 0;
   font-size: 13px;
+}
+.multi-picker {
+  margin: 0 0 20px;
+  min-width: 0;
+}
+.multi-picker legend {
+  font-size: 13px;
+  margin-bottom: 0;
+}
+.multi-picker > small {
+  display: block;
+  margin-top: 8px;
+}
+.selection-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.selection-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 10px;
+  border-radius: 16px;
+  background: #e8eee8;
+  font-size: 13px;
+}
+.selection-pill > span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.selection-pill svg {
+  flex-shrink: 0;
+}
+button.pill-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #32634c;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+button.pill-remove:hover {
+  background: #cddfd1;
 }

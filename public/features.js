@@ -17,6 +17,43 @@ const toggle = (bot, guild, item, module = false) =>
   `<button type="button" role="switch" aria-checked="${item.enabled}" aria-label="${escape(item.label)} enabled" class="switch" data-action="toggle-${module ? 'module' : 'feature'}" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}" data-id="${escape(module ? item.id : item.featureId)}" data-enabled="${!item.enabled}"><span></span></button>`;
 const glance = (module) =>
   `<p class="muted">${module.features.filter((f) => f.enabled).length} of ${module.features.length} features on${!module.enabled ? ' · Module is off' : ''}</p>${module.features.some((f) => f.missingIntents.length) ? '<span class="badge offline">Degraded · missing intents</span>' : ''}`;
+const colorDot = (color) =>
+  color
+    ? `<svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="${/^#[0-9a-f]{6}$/i.test(color) ? color : '#888888'}"/></svg>`
+    : '';
+function selectionPill(option) {
+  return `<span class="selection-pill">${colorDot(option.color)}<span>${escape(option.label)}</span><button type="button" class="pill-remove" aria-label="Remove ${escape(option.label)}" data-remove-selection="${escape(option.value)}">×</button></span>`;
+}
+function multiPicker(name, ui, options, selected) {
+  const empty =
+    ui.type === 'roles'
+      ? 'No roles selected. No roles will be assigned.'
+      : 'No channels selected. No channels are ignored.';
+  return `<fieldset class="multi-picker" data-name="config:${escape(name)}" data-empty="${escape(empty)}"><legend>${escape(ui.label)}</legend><select data-multi-add aria-label="${escape(ui.label)}"><option value="">${ui.type === 'roles' ? 'Add a role…' : 'Add a channel…'}</option>${options.map((o) => `<option value="${escape(o.value)}" data-label="${escape(o.label)}" data-color="${escape(o.color ?? '')}" ${selected.includes(o.value) ? 'disabled' : ''}>${escape(o.label)}</option>`).join('')}</select><div class="multi-values">${selected.map((id) => `<input type="hidden" name="config:${escape(name)}" value="${escape(id)}">`).join('')}</div><div class="selection-pills" aria-live="polite">${selected.length ? selected.map((id) => selectionPill(options.find((o) => o.value === id))).join('') : `<small>${empty}</small>`}</div><small>${escape(ui.help)}</small></fieldset>`;
+}
+export function refreshMultiPicker(picker) {
+  const selected = [...picker.querySelectorAll('input[type="hidden"]')].map(
+    (input) => input.value,
+  );
+  const select = picker.querySelector('select');
+  const options = [...select.options].filter((option) => option.value);
+  for (const option of options)
+    option.disabled = selected.includes(option.value);
+  select.value = '';
+  picker.querySelector('.selection-pills').innerHTML = selected.length
+    ? selected
+        .map((id) => {
+          const option = options.find((o) => o.value === id);
+          return selectionPill({
+            value: id,
+            label: option.dataset.label,
+            color: option.dataset.color,
+          });
+        })
+        .join('')
+    : `<small>${escape(picker.dataset.empty)}</small>`;
+}
+
 function field(name, ui, schema, value, resources) {
   value ??= schema.default;
   const key = `config:${escape(name)}`;
@@ -47,15 +84,14 @@ function field(name, ui, schema, value, resources) {
       value: choice.id ?? choice.value,
       label:
         choice.label ??
-        `${role ? '● ' : '# '}${choice.name}${role ? '' : ` · ${types[choice.type] ?? 'Channel'}`}`,
+        `${role ? '' : '# '}${choice.name}${role ? '' : ` · ${types[choice.type] ?? 'Channel'}`}`,
       color: choice.color,
     }));
     for (const id of selected)
       if (id && !options.some((o) => o.value === id))
         options.push({ value: id, label: 'Unavailable saved choice' });
-    input = `<select name="${key}" ${multi ? 'multiple' : ''}>${multi ? '' : '<option value="">Choose…</option>'}${options.map((o) => `<option value="${escape(o.value)}" ${selected.includes(o.value) ? 'selected' : ''}>${escape(o.label)}</option>`).join('')}</select>`;
-    if (role)
-      input += `<span class="role-colors">${(choices ?? []).map((r) => `<span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="${/^#[0-9a-f]{6}$/i.test(r.color) ? r.color : '#888888'}"/></svg> ${escape(r.name)}</span>`).join('')}</span>`;
+    if (multi) return multiPicker(name, ui, options, selected);
+    input = `<select name="${key}"><option value="">Choose…</option>${options.map((o) => `<option value="${escape(o.value)}" ${selected.includes(o.value) ? 'selected' : ''}>${escape(o.label)}</option>`).join('')}</select>`;
   } else if (ui.type === 'textarea')
     input = `<textarea name="${key}" ${schema.maxLength ? `maxlength="${schema.maxLength}"` : ''}>${escape(value ?? '')}</textarea>`;
   else

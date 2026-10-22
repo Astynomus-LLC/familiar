@@ -3,6 +3,7 @@ import {
   serverView,
   gatewayForm,
   featureConfig,
+  refreshMultiPicker,
 } from './features.js';
 import { clientSetup, checkConnection } from './client-setup.js';
 import {
@@ -19,7 +20,6 @@ import { pageContent } from './pages.js';
 
 const main = document.querySelector('#main');
 const nav = document.querySelector('#nav');
-let session;
 let state;
 let page = location.hash.slice(1) || 'dashboard';
 let generatedKey;
@@ -46,127 +46,167 @@ function notice(message) {
   }, 8000);
 }
 
+let renderVersion = 0;
 async function render() {
-  session = await api('/api/session');
-  document.querySelector('#account').innerHTML = session.user
-    ? `<div class="row">${avatar(session.user)}<small>${escape(session.user.name)} · ${escape(session.user.role)}</small><button class="secondary" data-action="logout">Sign out</button></div>`
-    : '';
-  nav.innerHTML = '';
-  if (session.setupRequired) {
-    main.innerHTML = setup(session);
+  const version = ++renderVersion;
+  const route = page;
+  if (route.startsWith('servers/')) {
+    location.hash = `bots/${route.slice(8)}/servers`;
     return;
   }
-  if (!session.user) {
-    main.innerHTML =
-      '<section class="welcome"><p class="eyebrow">Welcome back</p><h1>Your bots. Your Familiar.</h1><p class="muted">Sign in to manage this instance.</p><a class="button" href="/auth/login">Sign in with Discord</a></section>';
-    return;
+  main.setAttribute('aria-busy', 'true');
+  try {
+    const view = await buildView(route);
+    if (version !== renderVersion || route !== page) return;
+    state = view.state;
+    serverGuilds = view.serverGuilds;
+    const account = document.querySelector('#account');
+    if (account.innerHTML !== view.account) account.innerHTML = view.account;
+    if (nav.innerHTML !== view.nav) nav.innerHTML = view.nav;
+    main.innerHTML = view.main;
+  } catch (error) {
+    if (version === renderVersion && route === page) throw error;
+  } finally {
+    if (version === renderVersion) main.removeAttribute('aria-busy');
   }
-  if (!['owner', 'member'].includes(session.user.role)) {
-    main.innerHTML = `<section class="welcome"><h1>${session.user.role === 'denied' ? 'Access not approved' : 'Request access'}</h1><p>${session.user.role === 'denied' ? 'Contact the owner of this instance.' : 'Your Discord profile is in the owner’s approval queue. You can check back here once they approve it.'}</p><button data-action="refresh">Check access</button></section>`;
-    return;
-  }
-  state = await api('/api/admin/state');
-  const pages = [
-    'dashboard',
-    'bots',
-    'keys',
-    ...(session.user.role === 'owner' ? ['access'] : []),
-    'settings',
-    'audit log',
-  ];
-  nav.innerHTML = pages
-    .map(
-      (name) =>
-        `<a href="#${name.replaceAll(' ', '-')}" ${page === name.replaceAll(' ', '-') ? 'aria-current="page"' : ''}>${name[0].toUpperCase() + name.slice(1)}</a>`,
-    )
-    .join('');
-  if (!state.bots.length) {
-    main.innerHTML = `<p class="eyebrow">Step 2 of 4 · Add a bot</p><h1>Meet your first bot.</h1><p class="muted">Ownership is claimed. Add your bot, then choose what it can do.</p>${botForm()}`;
-    return;
-  }
-  if (!state.keys.length && page === 'dashboard') {
-    main.innerHTML = `<p class="eyebrow">Step 3 of 4 · Choose categories</p><h1>A useful starting point.</h1>${botCard(state, state.bots[0])}<p class="eyebrow">Step 4 of 4 · Connect your agent</p>${keyForm(state)}`;
-    return;
-  }
-  if (generatedKey) {
-    main.innerHTML = keyResult(generatedKey, installClient);
-    return;
-  }
-  if (page.startsWith('servers/')) {
-    location.hash = `bots/${page.slice(8)}/servers`;
-    return;
-  }
-  if (page.startsWith('bots/')) {
-    const [, slug, tab = 'tools', guildId, moduleId] = page.split('/');
-    const bot = state.bots.find((b) => b.slug === slug);
-    if (!bot) throw new Error('Bot not found.');
-    if (tab === 'servers') {
-      serverGuilds = await api(`/api/admin/bots/${bot.slug}/servers`);
-      if (guildId) {
-        const guild = serverGuilds.find((g) => g.id === guildId);
-        if (!guild) throw new Error('Server not found.');
-        const resources = { channels: [], roles: [] };
-        if (moduleId) {
-          const results = await Promise.allSettled(
-            ['channels', 'roles'].map((kind) =>
-              api(`/api/admin/bots/${slug}/servers/${guildId}/${kind}`),
-            ),
-          );
-          results.forEach((result, index) => {
-            if (result.status === 'fulfilled')
-              resources[index ? 'roles' : 'channels'] = result.value;
-            else resources.error = result.reason.message;
-          });
-        }
-        main.innerHTML = serverView(
-          bot,
-          serverGuilds,
-          guild,
-          moduleId,
-          resources,
-        );
-        return;
-      }
+}
+
+// Build the next view off-screen, then commit it once. Slow requests from a
+// previous route cannot replace a newer page or collapse the navigation shell.
+async function buildView(page) {
+  const main = { innerHTML: '' };
+  const nav = { innerHTML: '' };
+  const account = { innerHTML: '' };
+  let session;
+  let state;
+  let serverGuilds = [];
+  async function prepare() {
+    session = await api('/api/session');
+    account.innerHTML = session.user
+      ? `<div class="row">${avatar(session.user)}<small>${escape(session.user.name)} · ${escape(session.user.role)}</small><button class="secondary" data-action="logout">Sign out</button></div>`
+      : '';
+    nav.innerHTML = '';
+    if (session.setupRequired) {
+      main.innerHTML = setup(session);
+      return;
     }
-    const tabs = [
-      ['tools', 'MCP Tools'],
-      ['intents', 'Intents'],
-      ['keys', 'API Keys'],
-      ['servers', 'Servers'],
-      ['audit', 'Audit Log'],
+    if (!session.user) {
+      main.innerHTML =
+        '<section class="welcome"><p class="eyebrow">Welcome back</p><h1>Your bots. Your Familiar.</h1><p class="muted">Sign in to manage this instance.</p><a class="button" href="/auth/login">Sign in with Discord</a></section>';
+      return;
+    }
+    if (!['owner', 'member'].includes(session.user.role)) {
+      main.innerHTML = `<section class="welcome"><h1>${session.user.role === 'denied' ? 'Access not approved' : 'Request access'}</h1><p>${session.user.role === 'denied' ? 'Contact the owner of this instance.' : 'Your Discord profile is in the owner’s approval queue. You can check back here once they approve it.'}</p><button data-action="refresh">Check access</button></section>`;
+      return;
+    }
+    state = await api('/api/admin/state');
+    const pages = [
+      'dashboard',
+      'bots',
+      'keys',
+      ...(session.user.role === 'owner' ? ['access'] : []),
+      'settings',
+      'audit log',
     ];
-    const header = `<p><a href="#bots">← Bots</a></p><header class="row between panel"><div class="row">${avatar(bot)}<h1>${escape(bot.name)}</h1><span class="badge">${escape(bot.state)}</span></div><button class="secondary" data-action="reconnect" data-slug="${escape(bot.slug)}">Reconnect</button></header><nav class="bot-tabs" aria-label="Bot sections">${tabs.map(([id, label]) => `<a href="#bots/${escape(bot.slug)}/${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
-    const content =
-      tab === 'tools'
-        ? botCard(state, bot)
-        : tab === 'intents'
-          ? gatewayForm(state, bot)
-          : tab === 'servers'
-            ? serversView(bot, serverGuilds)
-            : tab === 'keys'
-              ? pageContent(
-                  'keys',
-                  {
-                    ...state,
-                    bots: [bot],
-                    keys: state.keys.filter(
-                      (key) => key.bots === null || key.bots.includes(slug),
-                    ),
-                  },
-                  session,
-                )
-              : tab === 'audit'
-                ? `<h2>Audit log</h2>${auditTable(await api(`/api/admin/audit?bot=${encodeURIComponent(slug)}`))}`
-                : '<p>Section not found.</p>';
-    main.innerHTML = header + content;
-    return;
+    nav.innerHTML = pages
+      .map(
+        (name) =>
+          `<a href="#${name.replaceAll(' ', '-')}" ${page === name.replaceAll(' ', '-') ? 'aria-current="page"' : ''}>${name[0].toUpperCase() + name.slice(1)}</a>`,
+      )
+      .join('');
+    if (!state.bots.length) {
+      main.innerHTML = `<p class="eyebrow">Step 2 of 4 · Add a bot</p><h1>Meet your first bot.</h1><p class="muted">Ownership is claimed. Add your bot, then choose what it can do.</p>${botForm()}`;
+      return;
+    }
+    if (!state.keys.length && page === 'dashboard') {
+      main.innerHTML = `<p class="eyebrow">Step 3 of 4 · Choose categories</p><h1>A useful starting point.</h1>${botCard(state, state.bots[0])}<p class="eyebrow">Step 4 of 4 · Connect your agent</p>${keyForm(state)}`;
+      return;
+    }
+    if (generatedKey) {
+      main.innerHTML = keyResult(generatedKey, installClient);
+      return;
+    }
+    if (page.startsWith('bots/')) {
+      const [, slug, tab = 'tools', guildId, moduleId] = page.split('/');
+      const bot = state.bots.find((b) => b.slug === slug);
+      if (!bot) throw new Error('Bot not found.');
+      if (tab === 'servers') {
+        serverGuilds = await api(`/api/admin/bots/${bot.slug}/servers`);
+        if (guildId) {
+          const guild = serverGuilds.find((g) => g.id === guildId);
+          if (!guild) throw new Error('Server not found.');
+          const resources = { channels: [], roles: [] };
+          if (moduleId) {
+            const results = await Promise.allSettled(
+              ['channels', 'roles'].map((kind) =>
+                api(`/api/admin/bots/${slug}/servers/${guildId}/${kind}`),
+              ),
+            );
+            results.forEach((result, index) => {
+              if (result.status === 'fulfilled')
+                resources[index ? 'roles' : 'channels'] = result.value;
+              else resources.error = result.reason.message;
+            });
+          }
+          main.innerHTML = serverView(
+            bot,
+            serverGuilds,
+            guild,
+            moduleId,
+            resources,
+          );
+          return;
+        }
+      }
+      const tabs = [
+        ['tools', 'MCP Tools'],
+        ['intents', 'Intents'],
+        ['keys', 'API Keys'],
+        ['servers', 'Servers'],
+        ['audit', 'Audit Log'],
+      ];
+      const header = `<p><a href="#bots">← Bots</a></p><header class="row between panel"><div class="row">${avatar(bot)}<h1>${escape(bot.name)}</h1><span class="badge">${escape(bot.state)}</span></div><button class="secondary" data-action="reconnect" data-slug="${escape(bot.slug)}">Reconnect</button></header><nav class="bot-tabs" aria-label="Bot sections">${tabs.map(([id, label]) => `<a href="#bots/${escape(bot.slug)}/${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+      const content =
+        tab === 'tools'
+          ? botCard(state, bot)
+          : tab === 'intents'
+            ? gatewayForm(state, bot)
+            : tab === 'servers'
+              ? serversView(bot, serverGuilds)
+              : tab === 'keys'
+                ? pageContent(
+                    'keys',
+                    {
+                      ...state,
+                      bots: [bot],
+                      keys: state.keys.filter(
+                        (key) => key.bots === null || key.bots.includes(slug),
+                      ),
+                    },
+                    session,
+                  )
+                : tab === 'audit'
+                  ? `<h2>Audit log</h2>${auditTable(await api(`/api/admin/audit?bot=${encodeURIComponent(slug)}`))}`
+                  : '<p>Section not found.</p>';
+      main.innerHTML = header + content;
+      return;
+    }
+    const entries = page === 'audit-log' ? await api('/api/admin/audit') : [];
+    const people =
+      page === 'access' && session.user.role === 'owner'
+        ? await api('/api/admin/access')
+        : [];
+    main.innerHTML = pageContent(page, state, session, entries, people);
   }
-  const entries = page === 'audit-log' ? await api('/api/admin/audit') : [];
-  const people =
-    page === 'access' && session.user.role === 'owner'
-      ? await api('/api/admin/access')
-      : [];
-  main.innerHTML = pageContent(page, state, session, entries, people);
+  await prepare();
+  return {
+    main: main.innerHTML,
+    nav: nav.innerHTML,
+    account: account.innerHTML,
+    session,
+    state,
+    serverGuilds,
+  };
 }
 
 async function submit(form) {
@@ -351,6 +391,19 @@ async function action(button) {
 }
 
 document.addEventListener('change', (event) => {
+  if (event.target.matches('[data-multi-add]')) {
+    const select = event.target;
+    const picker = select.closest('.multi-picker');
+    if (select.value) {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = picker.dataset.name;
+      input.value = select.value;
+      picker.querySelector('.multi-values').append(input);
+      refreshMultiPicker(picker);
+    }
+    return;
+  }
   if (['server-switcher', 'module-picker'].includes(event.target.id))
     location.hash = event.target.value;
   if (event.target.id !== 'install-client' || !generatedKey) return;
@@ -362,7 +415,7 @@ document.addEventListener('change', (event) => {
 document.addEventListener('submit', async (event) => {
   if (!event.target.matches('form[data-form]')) return;
   event.preventDefault();
-  const button = event.target.querySelector('button');
+  const button = event.target.querySelector('button:not([type="button"])');
   button.disabled = true;
   try {
     await submit(event.target);
@@ -373,6 +426,15 @@ document.addEventListener('submit', async (event) => {
   }
 });
 document.addEventListener('click', async (event) => {
+  const remove = event.target.closest('[data-remove-selection]');
+  if (remove) {
+    const picker = remove.closest('.multi-picker');
+    for (const input of picker.querySelectorAll('input[type="hidden"]'))
+      if (input.value === remove.dataset.removeSelection) input.remove();
+    refreshMultiPicker(picker);
+    picker.querySelector('select').focus();
+    return;
+  }
   const button = event.target.closest('button[data-action]');
   if (!button) return;
   button.disabled = true;
@@ -406,9 +468,19 @@ window.setInterval(async () => {
     return;
   refreshingOverview = true;
   const route = page;
+  const version = renderVersion;
+  if (main.hasAttribute('aria-busy')) {
+    refreshingOverview = false;
+    return;
+  }
   try {
     const guilds = await api(`/api/admin/bots/${parts[1]}/servers`);
-    if (page !== route) return;
+    if (
+      page !== route ||
+      version !== renderVersion ||
+      main.hasAttribute('aria-busy')
+    )
+      return;
     const guild = guilds.find((g) => g.id === parts[3]);
     const previous = serverGuilds.find((g) => g.id === parts[3]);
     if (guild && JSON.stringify(guild) !== JSON.stringify(previous)) {

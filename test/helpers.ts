@@ -35,6 +35,7 @@ export async function fixture(liveClient = false) {
                   fetch: async () =>
                     new Map([
                       ['88', { id: '88', name: 'Member', hexColor: '#32634c' }],
+                      ['89', { id: '89', name: 'Helper', hexColor: '#4466aa' }],
                     ]),
                 },
               }),
