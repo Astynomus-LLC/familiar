@@ -66,11 +66,133 @@ export function thresholdRow(
 export function casesView(result, bot, guild, user = '') {
   return `<section class="panel" id="case-browser"><h3>Server cases</h3><form data-form="case-filter" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}"><label>User ID (optional)<input name="user" pattern="[0-9]*" value="${escape(user)}" placeholder="Paste a user ID"></label><button>Filter</button></form>${result.activeWarnCount === null ? '' : `<p>${result.activeWarnCount} active warnings</p>`}<div class="case-results">${result.cases.map((c) => `<article class="panel"><h4>#${c.case_number} · ${escape(c.action)} · ${c.active ? 'Active' : 'Void'}</h4><p>Subject: ${escape(c.user_id)} · Actor: ${escape(c.actor)}</p><p>${escape(c.reason)}</p><time>${escape(c.created_at)}</time>${c.expires_at ? `<p>Expires: ${escape(c.expires_at)}</p>` : ''}${c.active ? `<button type="button" data-action="void-case" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}" data-id="${c.case_number}" data-user="${escape(user)}">Void case</button>` : ''}</article>`).join('') || '<p>No cases in this server.</p>'}</div>${result.cases.length === 25 ? `<button type="button" data-action="older-cases" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}" data-user="${escape(user)}" data-before="${result.cases.at(-1).case_number}">Older cases</button>` : ''}</section>`;
 }
+const commandFields = {
+  name: {
+    type: 'text',
+    label: 'Name / exact trigger',
+    help: 'Command names have no spaces.',
+  },
+  match: {
+    type: 'select',
+    label: 'Match',
+    help: 'Command uses the shared prefix.',
+    options: [
+      { value: 'command', label: 'Command' },
+      { value: 'exact', label: 'Exact message' },
+    ],
+  },
+  response: {
+    type: 'textarea',
+    label: 'Response',
+    help: 'Up to 2000 characters; placeholders supported.',
+  },
+  roles: {
+    type: 'roles',
+    label: 'Allowed roles',
+    help: 'Empty allows everyone.',
+  },
+  channels: {
+    type: 'channels',
+    label: 'Allowed channels',
+    help: 'Empty allows all channels.',
+  },
+  cooldownSeconds: {
+    type: 'number',
+    label: 'Cooldown seconds',
+    help: 'Per user and command.',
+  },
+  deleteInvocation: {
+    type: 'toggle',
+    label: 'Delete invocation',
+    help: 'Requires Manage Messages.',
+  },
+};
+const bindingFields = {
+  channelId: {
+    type: 'channel',
+    label: 'Channel',
+    help: 'Channel containing the message.',
+  },
+  messageId: {
+    type: 'text',
+    label: 'Message ID or link',
+    help: 'A full Discord message link fills the channel automatically.',
+  },
+  emoji: {
+    type: 'text',
+    label: 'Emoji',
+    help: 'Unicode emoji or custom emoji ID / mention.',
+  },
+  roleId: {
+    type: 'role',
+    label: 'Role',
+    help: 'Must be below the bot’s highest role.',
+  },
+  mode: {
+    type: 'select',
+    label: 'Mode',
+    help: 'Toggle removes the role when the reaction is removed.',
+    options: [
+      { value: 'toggle', label: 'Toggle' },
+      { value: 'add_only', label: 'Add only' },
+    ],
+  },
+};
+function communityRow(kind, row, resources) {
+  const fields = kind === 'commands' ? commandFields : bindingFields;
+  row = { match: 'command', cooldownSeconds: 0, mode: 'toggle', ...row };
+  return `<details class="community-row panel" open><summary>Edit ${escape(row.name ?? row.messageId ?? 'new entry')}</summary>${Object.entries(
+    fields,
+  )
+    .map(([name, ui]) =>
+      field(
+        name,
+        ui,
+        name === 'response' ? { maxLength: 2000 } : {},
+        row[name],
+        resources,
+      ),
+    )
+    .join(
+      '',
+    )}${kind === 'bindings' ? `<label>Guild custom emoji<select data-emoji-picker><option value="">Choose an emoji…</option>${(resources.emojis ?? []).map((e) => `<option value="${escape(e.id)}">${escape(e.name)}</option>`).join('')}</select></label>` : ''}<button type="button" data-action="remove-community-row">Delete entry</button></details>`;
+}
+function communityEntries(form, kind) {
+  return [
+    ...form.querySelectorAll(
+      `[data-community="${kind}"] > .community-rows > .community-row`,
+    ),
+  ].map((row) => {
+    const holder = document.createElement('form');
+    holder.append(row.cloneNode(true));
+    [...row.querySelectorAll('select')].forEach((select, index) => {
+      holder.querySelectorAll('select')[index].value = select.value;
+    });
+    const entry = featureConfig(
+      holder,
+      kind === 'commands' ? commandFields : bindingFields,
+    );
+    if (kind === 'bindings') {
+      const match = entry.messageId.match(
+        /^https:\/\/(?:www\.)?(?:discord\.com|discordapp\.com)\/channels\/(\d+)\/(\d+)\/(\d+)\/?$/,
+      );
+      if (match) {
+        if (match[1] !== form.dataset.guild)
+          throw new Error('Message link belongs to another server.');
+        entry.channelId = match[2];
+        entry.messageId = match[3];
+      }
+    }
+    return entry;
+  });
+}
 function field(name, ui, schema, value, resources) {
   value ??= schema.default;
   const key = `config:${escape(name)}`;
   const label = escape(ui.label);
   let input;
+  if (['commands', 'bindings'].includes(ui.type))
+    return `<fieldset data-community="${ui.type}"><legend>${label}</legend><p>${escape(ui.help)}</p><div class="community-rows">${(value ?? []).map((row) => communityRow(ui.type, row, resources)).join('')}</div><template>${communityRow(ui.type, {}, resources)}</template><button type="button" data-action="add-community-row">Add ${ui.type === 'commands' ? 'command' : 'binding'}</button>${ui.type === 'bindings' ? `<details><summary>Create a reaction role panel</summary>${field('panelChannel', { type: 'channel', label: 'Panel channel', help: 'Post a new bot-owned message.' }, {}, '', resources)}<label>Panel text<textarea data-panel-text maxlength="2000"></textarea></label><button type="button" data-action="create-reaction-panel">Create panel</button><output data-panel-result></output></details>` : ''}</fieldset>`;
   if (ui.type === 'thresholds')
     return `<fieldset data-thresholds="${key}"><legend>${label}</legend><div class="threshold-rows">${(value ?? []).map(thresholdRow).join('')}</div><button type="button" data-action="add-threshold">Add threshold</button><small>${escape(ui.help)}</small></fieldset>`;
   if (ui.type === 'list')
@@ -153,30 +275,32 @@ export function featureConfig(form, fields) {
       const key = `config:${name}`;
       return [
         name,
-        field.type === 'thresholds'
-          ? [
-              ...form.querySelectorAll(
-                `[data-thresholds="${key}"] .threshold-row`,
-              ),
-            ].map((row) => ({
-              count: Number(row.querySelector('[data-count]').value),
-              action: row.querySelector('[data-escalation-action]').value,
-              duration: row.querySelector('[data-duration]').value,
-            }))
-          : field.type === 'list'
-            ? String(data.get(key) ?? '')
-                .split('\n')
-                .map((s) => s.trim())
-                .filter(Boolean)
-            : field.type === 'toggle'
-              ? data.has(key)
-              : ['channels', 'roles'].includes(field.type)
-                ? data.getAll(key)
-                : field.type === 'number'
-                  ? data.get(key) === ''
-                    ? null
-                    : Number(data.get(key))
-                  : data.get(key),
+        ['commands', 'bindings'].includes(field.type)
+          ? communityEntries(form, field.type)
+          : field.type === 'thresholds'
+            ? [
+                ...form.querySelectorAll(
+                  `[data-thresholds="${key}"] .threshold-row`,
+                ),
+              ].map((row) => ({
+                count: Number(row.querySelector('[data-count]').value),
+                action: row.querySelector('[data-escalation-action]').value,
+                duration: row.querySelector('[data-duration]').value,
+              }))
+            : field.type === 'list'
+              ? String(data.get(key) ?? '')
+                  .split('\n')
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+              : field.type === 'toggle'
+                ? data.has(key)
+                : ['channels', 'roles'].includes(field.type)
+                  ? data.getAll(key)
+                  : field.type === 'number'
+                    ? data.get(key) === ''
+                      ? null
+                      : Number(data.get(key))
+                    : data.get(key),
       ];
     }),
   );

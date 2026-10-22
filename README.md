@@ -238,3 +238,13 @@ Feature manifests live in `src/features`, registered only in `registry.ts`, sepa
 from tool categories. SQLite indexes instances by bot and guild. Command ownership
 is persisted per bot and guild; synchronization creates/deletes individual owned
 commands, preserving commands managed through application-command tools.
+
+### Community
+
+The Community module provides per-bot, per-server custom commands and reaction roles. Its master toggle suspends both features while preserving their individual settings. Both require GuildMessages and MessageContent; reaction roles also requires GuildMessageReactions. Missing intents appear as degraded in the dashboard.
+
+Custom commands use the shared prefix (default `!`) or match an entire message exactly. Responses support `{user}`, `{userName}`, `{server}`, `{channel}`, and command-mode `{args}`. The list editor includes role/channel restrictions, per-user cooldowns, and optional invocation deletion. Bots never invoke commands. Responses are limited to 2000 characters, including after substitution; mention notifications are disabled.
+
+Reaction-role bindings select a channel, message ID (or pasted Discord message link), emoji, role, and toggle/add-only mode. Custom guild emojis are available in a picker. Create a panel from the editor to post a bot-owned message, or bind an existing message. The bot needs channel access and Manage Roles, with its highest role above the assigned role. Toggle removes the role on un-react; add-only leaves it assigned. Uncached messages are supported, and assignment failures are audited.
+
+The features tool category includes `list_custom_commands`, `add_custom_command`, `remove_custom_command`, `list_reaction_roles`, `add_reaction_role`, `remove_reaction_role`, and `create_reaction_role_panel`. Entry tools use the same camelCase fields as the editors' stored config (`commands` and `bindings`); removal identifies a command by name/match or a binding by channelId/messageId/emoji. Guild addressing accepts an ID, unambiguous name, or `all`; panel creation requires one guild, `channel`, and `text`. Tools and editors share live state. Adding entries preserves feature enablement; enable the feature with its switch or `set_feature_enabled`.

@@ -43,6 +43,8 @@ export interface FeatureContext {
 }
 export interface ConfigField {
   type:
+    | 'commands'
+    | 'bindings'
     | 'list'
     | 'thresholds'
     | 'toggle'

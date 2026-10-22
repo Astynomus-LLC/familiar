@@ -1,3 +1,4 @@
+import { emojiKey } from '../features/community.js';
 import {
   moderateChannel,
   type ChannelAction,
@@ -77,6 +78,7 @@ export const discordConnection: ConnectionFactory = (
     }),
     partials: [
       Partials.Message,
+      Partials.Reaction,
       Partials.Channel,
       Partials.GuildMember,
       Partials.User,
@@ -715,7 +717,11 @@ export class BotManager {
     string,
     { expires: number; value: unknown }
   >();
-  async guildResources(bot: Bot, guildId: string, kind: 'channels' | 'roles') {
+  async guildResources(
+    bot: Bot,
+    guildId: string,
+    kind: 'channels' | 'roles' | 'emojis',
+  ) {
     const client = this.connections.get(bot.slug)?.client;
     if (!client?.isReady())
       throw new Error('Connect the bot to load server choices.');
@@ -724,17 +730,88 @@ export class BotManager {
     if (cached && cached.expires > Date.now()) return cached.value;
     const guild = await client.guilds.fetch(guildId);
     const value =
-      kind === 'channels'
-        ? [...(await guild.channels.fetch()).values()]
-            .filter((c) => c !== null)
-            .map((c) => ({ id: c.id, name: c.name, type: c.type }))
-        : [...(await guild.roles.fetch()).values()].map((r) => ({
-            id: r.id,
-            name: r.name,
-            color: r.hexColor,
-          }));
+      kind === 'emojis'
+        ? [...(await guild.emojis.fetch()).values()].map((e) => ({
+            id: e.id,
+            name: e.name,
+          }))
+        : kind === 'channels'
+          ? [...(await guild.channels.fetch()).values()]
+              .filter((c) => c !== null)
+              .map((c) => ({ id: c.id, name: c.name, type: c.type }))
+          : [...(await guild.roles.fetch()).values()].map((r) => ({
+              id: r.id,
+              name: r.name,
+              color: r.hexColor,
+            }));
     this.resourceCache.set(key, { expires: Date.now() + 15000, value });
     return value;
+  }
+
+  async communityEntries(
+    bot: Bot,
+    address: string,
+    kind: 'commands' | 'bindings',
+    operation: 'list' | 'add' | 'remove',
+    entry: Record<string, unknown> = {},
+  ) {
+    const featureId =
+      kind === 'commands'
+        ? 'community.customCommands'
+        : 'community.reactionRoles';
+    const feature = features.find((f) => f.id === featureId)!;
+    const guilds = await this.resolveGuilds(bot, address);
+    const instances = guilds.map((guild) => {
+      const old = this.store
+        .featureInstances(bot.id, guild.id)
+        .find((i) => i.featureId === featureId);
+      const rows = (old?.config[kind] ?? []) as Record<string, unknown>[];
+      const matches = (row: Record<string, unknown>) =>
+        kind === 'commands'
+          ? row.name === entry.name && row.match === entry.match
+          : row.channelId === entry.channelId &&
+            row.messageId === entry.messageId &&
+            emojiKey(String(row.emoji)) === emojiKey(String(entry.emoji));
+      const next =
+        operation === 'add'
+          ? [...rows, entry]
+          : operation === 'remove'
+            ? rows.filter((row) => !matches(row))
+            : rows;
+      return {
+        botId: bot.id,
+        guildId: guild.id,
+        featureId,
+        enabled: old?.enabled ?? false,
+        config: feature.configSchema.parse({ [kind]: next }),
+      };
+    });
+    if (operation !== 'list') this.store.saveFeatureInstances(instances);
+    return instances;
+  }
+
+  async createReactionRolePanel(
+    bot: Bot,
+    address: string,
+    channel: string,
+    text: string,
+  ) {
+    if (address === 'all') throw new Error('Select one guild.');
+    if (!/^\d+$/.test(channel) || !text.length || text.length > 2000)
+      throw new Error('Provide a channel and 1–2000 characters.');
+    const [guild] = await this.resolveGuilds(bot, address);
+    const target = (await this.request(bot, 'GET', `/channels/${channel}`)) as {
+      guild_id: string;
+    };
+    if (target.guild_id !== guild.id)
+      throw new Error('Channel does not belong to the selected guild.');
+    const message = (await this.request(
+      bot,
+      'POST',
+      `/channels/${channel}/messages`,
+      { content: text, allowed_mentions: { parse: [] } },
+    )) as { id: string };
+    return { channelId: channel, messageId: message.id };
   }
 
   async configureFeature(

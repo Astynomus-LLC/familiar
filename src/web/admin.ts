@@ -165,10 +165,38 @@ export function mountAdmin(
       res.json(entry);
     },
   );
+  app.post(
+    '/api/admin/bots/:slug/servers/:guild/reaction-panel',
+    async (req, res) => {
+      const bot = store.bots().find((b) => b.slug === req.params.slug);
+      if (!bot) throw new Error('Bot not found.');
+      const input = z
+        .object({
+          channel: z.string().regex(/^\d+$/),
+          text: z.string().min(1).max(2000),
+        })
+        .parse(req.body);
+      const result = await manager.createReactionRolePanel(
+        bot,
+        String(req.params.guild),
+        input.channel,
+        input.text,
+      );
+      store.audit({
+        timestamp: new Date().toISOString(),
+        key: auth.person(req)!.id,
+        bot,
+        tool: 'create_reaction_role_panel',
+        target: result.messageId,
+        result: 'success',
+      });
+      res.json(result);
+    },
+  );
   app.get('/api/admin/bots/:slug/servers/:guild/:kind', async (req, res) => {
     const bot = store.bots().find((b) => b.slug === req.params.slug);
     if (!bot) throw new Error('Bot not found.');
-    const kind = z.enum(['channels', 'roles']).parse(req.params.kind);
+    const kind = z.enum(['channels', 'roles', 'emojis']).parse(req.params.kind);
     res.json(await manager.guildResources(bot, String(req.params.guild), kind));
   });
   app.patch('/api/admin/bots/:slug/modules', async (req, res) => {

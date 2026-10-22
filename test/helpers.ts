@@ -27,6 +27,10 @@ export async function fixture(liveClient: boolean | Client = false) {
                     cache: new Map(),
                     fetch: async (id: string) => ({
                       id,
+                      emojis: {
+                        fetch: async () =>
+                          new Map([['77', { id: '77', name: 'party' }]]),
+                      },
                       channels: {
                         fetch: async () =>
                           new Map([
@@ -67,6 +71,10 @@ export async function fixture(liveClient: boolean | Client = false) {
           { id: '10', name: 'Server A' },
           { id: '20', name: 'Server B' },
         ];
+      if (path === '/channels/99' && method === 'GET')
+        return { guild_id: '10' };
+      if (path === '/channels/99/messages' && method === 'POST')
+        return { id: '55' };
       return { ok: true };
     },
     async login() {

@@ -1,3 +1,4 @@
+import { communityFeatures, communityModule } from './community.js';
 import { automodFeatures, automodModule } from './automod.js';
 import { moderationFeature, moderationModule } from './moderation.js';
 import { z } from 'zod';
@@ -11,11 +12,13 @@ export const features: Feature[] = [
   moderationFeature,
   autorole,
   welcome,
+  ...communityFeatures,
 ];
 export const modules: Module[] = [
   loggingModule,
   automodModule,
   moderationModule,
+  communityModule,
   {
     id: 'members',
     label: 'Members',

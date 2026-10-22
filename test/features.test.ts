@@ -18,6 +18,7 @@ async function setup(
       'GuildMembers',
       'GuildModeration',
       'MessageContent',
+      'GuildMessageReactions',
     ],
   }).intents,
 ) {
@@ -427,4 +428,231 @@ test('registry fields have human presentation metadata and modules are nonempty'
   }
   for (const module of modules)
     assert.ok(features.some((f) => f.module === module.id));
+});
+
+test('community commands: MCP parity, placeholders, restrictions, cooldown, loops and live toggles', async () => {
+  const f = await setup();
+  const session = new Session(f.store, f.manager);
+  try {
+    for (const entry of [
+      {
+        name: 'ping',
+        match: 'command',
+        response: '{user} {userName} {server} {channel} {args}',
+        cooldownSeconds: 60,
+        deleteInvocation: true,
+      },
+      { name: 'gg', match: 'exact', response: 'Good game' },
+      { name: 'secret', match: 'command', response: 'Private', roles: ['88'] },
+    ]) {
+      const result = await session.call('add_custom_command', {
+        guild: '10',
+        ...entry,
+      });
+      assert.equal(result.isError, undefined, JSON.stringify(result));
+    }
+    await f.manager.configureFeature(
+      f.bot,
+      '10',
+      'community.customCommands',
+      undefined,
+      true,
+    );
+    const state = f.manager
+      .moduleStates(f.bot, '10')
+      .find((m) => m.id === 'community')!;
+    assert.equal((state.features[0].config.commands as unknown[]).length, 3);
+    const replies: unknown[] = [];
+    let deleted = 0;
+    const message = {
+      ...f.message(0),
+      author: { id: '42', bot: false, username: 'Alice' },
+      member: { roles: { cache: new Map() } },
+      reply: async (body: unknown) => {
+        replies.push(body);
+      },
+      delete: async () => {
+        deleted++;
+      },
+    };
+    await f.engine.dispatch('messageCreate', {
+      ...message,
+      content: '!ping hello world',
+    });
+    assert.deepEqual(replies[0], {
+      content: '<@42> Alice Server <#30> hello world',
+      allowedMentions: { parse: [], repliedUser: false },
+    });
+    assert.equal(deleted, 1);
+    await f.engine.dispatch('messageCreate', {
+      ...message,
+      content: '!ping again',
+    });
+    await f.engine.dispatch('messageCreate', {
+      ...message,
+      content: '!secret',
+    });
+    await f.engine.dispatch('messageCreate', {
+      ...message,
+      content: 'gg',
+      author: { id: '1', bot: true },
+    });
+    assert.equal(replies.length, 1);
+    await f.engine.dispatch('messageCreate', { ...message, content: 'gg' });
+    assert.equal(replies.length, 2);
+    await f.manager.configureModule(f.bot, '10', 'community', undefined, false);
+    await f.engine.dispatch('messageCreate', { ...message, content: 'gg' });
+    assert.equal(replies.length, 2);
+    const invalid = await session.call('add_custom_command', {
+      guild: '10',
+      name: 'long',
+      match: 'exact',
+      response: 'a'.repeat(2001),
+    });
+    assert.equal(invalid.isError, true);
+  } finally {
+    session.close();
+    f.close();
+  }
+});
+
+test('reaction roles fetch uncached bound messages, toggle roles, skip add_only removals and audit hierarchy', async () => {
+  const f = await setup();
+  const session = new Session(f.store, f.manager);
+  try {
+    const binding = {
+      channelId: '30',
+      messageId: '50',
+      emoji: '👍',
+      roleId: '88',
+      mode: 'toggle',
+    };
+    assert.equal(
+      (await session.call('add_reaction_role', { guild: '10', ...binding }))
+        .isError,
+      undefined,
+    );
+    await f.manager.configureFeature(
+      f.bot,
+      '10',
+      'community.reactionRoles',
+      undefined,
+      true,
+    );
+    const actions: string[] = [];
+    let hierarchy = 1;
+    const guild = {
+      ...f.message(0).guild,
+      members: {
+        fetch: async () => ({
+          roles: {
+            add: async () => {
+              actions.push('add');
+            },
+            remove: async () => {
+              actions.push('remove');
+            },
+          },
+        }),
+        me: { roles: { highest: { comparePositionTo: () => hierarchy } } },
+      },
+      roles: { fetch: async () => ({ managed: false }) },
+    };
+    const reaction = {
+      emoji: { id: null, name: '👍' },
+      partial: true,
+      fetch: async () => {
+        actions.push('reaction fetch');
+      },
+      message: {
+        id: '50',
+        channelId: '30',
+        guild,
+        partial: true,
+        fetch: async () => {
+          actions.push('message fetch');
+        },
+      },
+    };
+    const user = { id: '42', bot: false };
+    await f.engine.dispatch(
+      'messageReactionAdd',
+      { ...reaction, message: { ...reaction.message, id: '999' } },
+      user,
+    );
+    assert.deepEqual(actions, []);
+    await f.engine.dispatch('messageReactionAdd', reaction, user);
+    assert.deepEqual(actions, ['message fetch', 'reaction fetch', 'add']);
+    await f.engine.dispatch('messageReactionRemove', reaction, user);
+    assert.equal(actions.at(-1), 'remove');
+    await session.call('remove_reaction_role', {
+      guild: '10',
+      channelId: '30',
+      messageId: '50',
+      emoji: '👍',
+    });
+    await session.call('add_reaction_role', {
+      guild: '10',
+      ...binding,
+      mode: 'add_only',
+    });
+    const count = actions.length;
+    await f.engine.dispatch('messageReactionRemove', reaction, user);
+    assert.equal(actions.length, count);
+    hierarchy = -1;
+    await f.engine.dispatch('messageReactionAdd', reaction, user);
+    assert.match(f.store.auditEntries()[0].result, /role hierarchy/);
+    assert.equal(actions.filter((a) => a === 'add').length, 1);
+    assert.equal(
+      (
+        f.manager
+          .featureStates(f.bot, '10')
+          .find((s) => s.featureId === 'community.reactionRoles')!.config
+          .bindings as unknown[]
+      ).length,
+      1,
+    );
+  } finally {
+    session.close();
+    f.close();
+  }
+});
+
+test('community requires configured intents and validates duplicate bindings', async () => {
+  const f = await setup(['Guilds', 'GuildMessages']);
+  try {
+    await f.manager.configureFeature(
+      f.bot,
+      '10',
+      'community.customCommands',
+      { commands: [] },
+      true,
+    );
+    await f.manager.configureFeature(
+      f.bot,
+      '10',
+      'community.reactionRoles',
+      { bindings: [] },
+      true,
+    );
+    for (const state of f.manager
+      .featureStates(f.bot, '10')
+      .filter((s) => s.module === 'community')) {
+      assert.equal(state.state, 'degraded');
+      assert.ok(state.missingIntents.includes('MessageContent'));
+    }
+    const binding = {
+      channelId: '30',
+      messageId: '50',
+      emoji: '<:party:77>',
+      roleId: '88',
+    };
+    await assert.rejects(
+      f.manager.configureFeature(f.bot, '10', 'community.reactionRoles', {
+        bindings: [binding, { ...binding, emoji: '77', roleId: '89' }],
+      }),
+    );
+  } finally {
+    f.close();
+  }
 });

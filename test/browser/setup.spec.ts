@@ -238,6 +238,84 @@ test('setup wizard through scoped key and client configuration', async ({
       .filter({ has: page.getByRole('heading', { name: 'Server A' }) })
       .click();
     await expect(page.locator('.server-header')).toContainText('Server A');
+    await client.callTool({
+      name: 'add_custom_command',
+      arguments: {
+        guild: '10',
+        name: 'ping',
+        match: 'command',
+        response: 'Hi {user}',
+        roles: ['88'],
+      },
+    });
+    await client.callTool({
+      name: 'add_reaction_role',
+      arguments: {
+        guild: '10',
+        channelId: '99',
+        messageId: '44',
+        emoji: '👍',
+        roleId: '88',
+      },
+    });
+    await page.getByRole('link', { name: 'Configure Community →' }).click();
+    await page.getByText('Configure Custom commands', { exact: true }).click();
+    const commands = page.locator('[data-community="commands"]');
+    await expect(commands.getByLabel('Name / exact trigger')).toHaveValue(
+      'ping',
+    );
+    await expect(commands.getByLabel('Response', { exact: false })).toHaveValue(
+      'Hi {user}',
+    );
+    await commands.getByLabel('Response', { exact: false }).fill('Pong {args}');
+    await commands
+      .locator('..')
+      .getByRole('button', { name: 'Save settings' })
+      .click();
+    await page.getByText('Configure Reaction roles', { exact: true }).click();
+    const bindings = page.locator('[data-community="bindings"]');
+    await expect(bindings.getByLabel('Message ID or link')).toHaveValue('44');
+    await bindings
+      .getByLabel('Message ID or link')
+      .fill('https://discord.com/channels/10/99/45');
+    await bindings.getByLabel('Guild custom emoji').selectOption('77');
+    await bindings
+      .getByLabel('Mode', { exact: false })
+      .selectOption('add_only');
+    await bindings
+      .locator('..')
+      .getByRole('button', { name: 'Save settings' })
+      .click();
+    const configured = await client.callTool({
+      name: 'list_reaction_roles',
+      arguments: { guild: '10' },
+    });
+    expect(JSON.stringify(configured)).toContain('45');
+    expect(JSON.stringify(configured)).toContain('77');
+    expect(JSON.stringify(configured)).toContain('add_only');
+    await page.getByText('Configure Reaction roles', { exact: true }).click();
+    await page
+      .getByText('Create a reaction role panel', { exact: true })
+      .click();
+    await page.getByLabel('Panel channel').selectOption('99');
+    await page.getByLabel('Panel text').fill('Choose a role');
+    await page
+      .getByRole('button', { name: 'Create panel', exact: true })
+      .click();
+    await expect(page.locator('[data-panel-result]')).toContainText(
+      'message 55',
+    );
+    await expect(bindings.locator('.community-row')).toHaveCount(2);
+    await bindings
+      .locator('.community-row')
+      .last()
+      .getByRole('button', { name: 'Delete entry' })
+      .click();
+    await page
+      .getByRole('navigation', { name: 'Modules' })
+      .getByRole('link', { name: 'Overview', exact: true })
+      .click();
+
     const loggingCard = page.locator('.module-card').filter({
       has: page.getByRole('heading', { name: 'Logging', exact: true }),
     });

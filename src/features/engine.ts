@@ -119,7 +119,8 @@ export class FeatureEngine {
   }
   async dispatch(name: string, ...args: any[]): Promise<void> {
     if (this.closed) return;
-    const guild = args.find((arg) => arg?.guild)?.guild as Guild | undefined;
+    const guild = (args.find((arg) => arg?.guild)?.guild ??
+      args[0]?.message?.guild) as Guild | undefined;
     if (!guild) return;
     if (name === 'interactionCreate' && args[0].customId?.startsWith('fam:')) {
       const ctx = this.context(

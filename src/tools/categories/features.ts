@@ -1,10 +1,64 @@
+import { customCommand, reactionBinding } from '../../features/community.js';
 import { z } from 'zod';
-import type { Category } from '../types.js';
+import type { Category, Tool } from '../types.js';
 const address = { guild: z.string(), feature_id: z.string() };
 export const featureTools: Category = {
   name: 'features',
   description: 'Configure autonomous features per bot and server',
   tools: [
+    ...(['commands', 'bindings'] as const).flatMap((kind) => {
+      const singular = kind === 'commands' ? 'custom_command' : 'reaction_role';
+      return (['list', 'add', 'remove'] as const).map((operation): Tool => ({
+        name: `${operation}_${singular}${operation === 'list' ? 's' : ''}`,
+        description: `${operation} ${singular.replaceAll('_', ' ')} entries. Saved settings respect the existing feature and module toggles.`,
+        schema:
+          operation === 'list'
+            ? z.object({ guild: z.string().default('all') })
+            : operation === 'add'
+              ? kind === 'commands'
+                ? customCommand.safeExtend({ guild: z.string() })
+                : reactionBinding.extend({ guild: z.string() })
+              : z.object({
+                  guild: z.string(),
+                  ...(kind === 'commands'
+                    ? { name: z.string(), match: z.enum(['command', 'exact']) }
+                    : {
+                        channelId: z.string().regex(/^\d+$/),
+                        messageId: z.string().regex(/^\d+$/),
+                        emoji: z.string(),
+                      }),
+                }),
+        mutating: operation !== 'list',
+        execute: ({ bot, manager }, args) => {
+          const { guild, ...entry } = args;
+          return manager.communityEntries(
+            bot,
+            String(guild),
+            kind,
+            operation,
+            entry,
+          );
+        },
+      }));
+    }),
+    {
+      name: 'create_reaction_role_panel',
+      description:
+        'Post a plain-text panel in one server and return its channel and message IDs.',
+      schema: z.object({
+        guild: z.string(),
+        channel: z.string().regex(/^\d+$/),
+        text: z.string().min(1).max(2000),
+      }),
+      mutating: true,
+      execute: ({ bot, manager }, args) =>
+        manager.createReactionRolePanel(
+          bot,
+          String(args.guild),
+          String(args.channel),
+          String(args.text),
+        ),
+    },
     {
       name: 'get_modlogs',
       description:

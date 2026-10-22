@@ -140,13 +140,14 @@ async function buildView(page) {
           const resources = { channels: [], roles: [] };
           if (moduleId) {
             const results = await Promise.allSettled(
-              ['channels', 'roles'].map((kind) =>
+              ['channels', 'roles', 'emojis'].map((kind) =>
                 api(`/api/admin/bots/${slug}/servers/${guildId}/${kind}`),
               ),
             );
             results.forEach((result, index) => {
               if (result.status === 'fulfilled')
-                resources[index ? 'roles' : 'channels'] = result.value;
+                resources[['channels', 'roles', 'emojis'][index]] =
+                  result.value;
               else resources.error = result.reason.message;
             });
           }
@@ -323,6 +324,36 @@ async function submit(form) {
 
 async function action(button) {
   const { action, slug, id, role, before } = button.dataset;
+  if (action === 'add-community-row') {
+    const editor = button.closest('[data-community]');
+    editor
+      .querySelector('.community-rows')
+      .append(editor.querySelector('template').content.cloneNode(true));
+    return;
+  }
+  if (action === 'remove-community-row') {
+    button.closest('.community-row').remove();
+    return;
+  }
+  if (action === 'create-reaction-panel') {
+    const form = button.closest('form');
+    const editor = button.closest('[data-community]');
+    const result = await api(
+      `/api/admin/bots/${form.dataset.slug}/servers/${form.dataset.guild}/reaction-panel`,
+      'POST',
+      {
+        channel: editor.querySelector('[name="config:panelChannel"]').value,
+        text: editor.querySelector('[data-panel-text]').value,
+      },
+    );
+    editor.querySelector('[data-panel-result]').textContent =
+      `Created panel: channel ${result.channelId}, message ${result.messageId}. Add a binding and save settings.`;
+    const row = editor.querySelector('template').content.cloneNode(true);
+    row.querySelector('[name="config:channelId"]').value = result.channelId;
+    row.querySelector('[name="config:messageId"]').value = result.messageId;
+    editor.querySelector('.community-rows').append(row);
+    return;
+  }
   if (action === 'add-threshold') {
     button
       .closest('fieldset')
@@ -542,3 +573,10 @@ window.setInterval(async () => {
     refreshingOverview = false;
   }
 }, 5000);
+
+document.addEventListener('change', (event) => {
+  if (event.target.matches('[data-emoji-picker]') && event.target.value)
+    event.target
+      .closest('.community-row')
+      .querySelector('[name="config:emoji"]').value = event.target.value;
+});
