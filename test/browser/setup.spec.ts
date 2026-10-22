@@ -127,6 +127,23 @@ test('setup wizard through scoped key and client configuration', async ({
     .filter({ has: page.getByRole('heading', { name: 'hello', exact: true }) })
     .click();
   await expect(page.getByLabel('moderation', { exact: true })).toBeChecked();
+  const messagesCategory = page
+    .locator('.tool-category')
+    .filter({ has: page.getByLabel('messages', { exact: true }) });
+  await expect(
+    messagesCategory.getByText('messages_send', { exact: true }),
+  ).not.toBeVisible();
+  await messagesCategory.locator('summary').click();
+  await expect(
+    messagesCategory.getByText('messages_send', { exact: true }),
+  ).toBeVisible();
+  await expect(messagesCategory).toContainText(
+    'Send a message. Mentions are disabled by default.',
+  );
+  await expect(
+    messagesCategory.getByLabel('messages', { exact: true }),
+  ).toBeChecked();
+
   const client = new Client({ name: 'browser-agent', version: '1' });
   const transport = new StreamableHTTPClientTransport(
     new URL('http://localhost:3210/mcp'),
@@ -307,6 +324,20 @@ test('setup wizard through scoped key and client configuration', async ({
       ),
     ).toBe(true);
     await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/#bots/hello-bot/audit');
+    const audit = page.getByRole('region', { name: 'Audit entries' });
+    await expect(audit).toBeVisible();
+    expect(
+      await audit.evaluate(
+        (element) => element.scrollHeight > element.clientHeight,
+      ),
+    ).toBe(true);
+    await audit.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    expect(
+      await audit.evaluate((element) => element.scrollTop),
+    ).toBeGreaterThan(0);
     const added = await page.request.post('/api/admin/bots', {
       headers: { Origin: 'http://localhost:3210' },
       data: { slug: 'other', token: 'other-token', categories: ['messages'] },

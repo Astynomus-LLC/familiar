@@ -446,3 +446,54 @@ textarea {
     padding: 16px;
   }
 }
+.audit-scroll {
+  max-height: 480px;
+  max-height: min(60vh, 480px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.audit-scroll thead {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 1;
+}
+.audit-scroll:focus-visible {
+  outline: 3px solid #a4bdac;
+  outline-offset: 3px;
+}
+.tool-categories {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  align-items: start;
+  gap: 16px;
+}
+.tool-category {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  min-width: 0;
+}
+.tool-category label,
+.tool-category p {
+  margin-bottom: 8px;
+}
+.tool-category details {
+  margin-top: 8px;
+}
+.tool-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.tool-list li {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+.tool-list code {
+  font-size: 12px;
+}
+.tool-list p {
+  margin: 8px 0 0;
+  font-size: 13px;
+}

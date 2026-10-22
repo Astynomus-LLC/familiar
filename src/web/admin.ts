@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { Store } from '../storage/store.js';
 import type { BotManager } from '../bots/manager.js';
-import { categories, validateCategories } from '../tools/registry.js';
+import { alwaysOn, categories, validateCategories } from '../tools/registry.js';
 import { mountAuth, type AuthOptions } from './auth.js';
 
 const keyInput = z.object({
@@ -59,9 +59,20 @@ export function mountAdmin(
         created: key.created,
         lastUsed: key.lastUsed,
       })),
-      categories: categories.map(({ name, description }) => ({
+      categories: categories.map(({ name, description, tools }) => ({
         name,
         description,
+        alwaysOn: alwaysOn.has(name),
+        tools: tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          access:
+            typeof tool.mutating === 'function'
+              ? 'Depends on request'
+              : tool.mutating
+                ? 'Read/write'
+                : 'Read-only',
+        })),
       })),
       intentNames,
       defaultBot: store.setting('defaultBot') ?? null,

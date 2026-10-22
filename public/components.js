@@ -29,9 +29,22 @@ export function categoryPicker(
   return `<div class="checks">${items.map((category) => check('categories', category.name, selected.includes(category.name), category.name.replaceAll('_', ' '))).join('')}</div>`;
 }
 
+export function toolCategoryPicker(categories, selected) {
+  return `<div class="tool-categories">${categories
+    .map(
+      (category) => `<section class="tool-category">
+<div class="row between">${category.alwaysOn ? `<strong>${escape(category.name.replaceAll('_', ' '))}</strong><span class="badge">Always available</span>` : check('categories', category.name, selected.includes(category.name), category.name.replaceAll('_', ' '))}</div>
+<p class="muted">${escape(category.description)}</p>
+<details><summary>View ${category.tools.length} tools in ${escape(category.name.replaceAll('_', ' '))}</summary>
+<ul class="tool-list">${category.tools.map((tool) => `<li><div class="row between"><code>${escape(tool.name)}</code><span class="badge">${escape(tool.access)}</span></div><p>${escape(tool.description)}</p></li>`).join('')}</ul>
+</details></section>`,
+    )
+    .join('')}</div>`;
+}
+
 export function auditTable(entries) {
   if (!entries.length) return '<p class="muted">No mutating calls yet.</p>';
-  return `<div class="table-wrap">
+  return `<div class="table-wrap audit-scroll" role="region" aria-label="Audit entries" tabindex="0">
 <table>
 <thead>
 <tr>
@@ -113,7 +126,7 @@ export function botCard(state, bot) {
 </div>${bot.error ? `<p>${escape(bot.error)}</p>` : ''}<form data-form="categories" data-slug="${escape(bot.slug)}">
 <fieldset>
 <legend>Enabled categories</legend>
-<p class="muted">Core and raw API are always available. Connected agents receive changes immediately.</p>${categoryPicker(state.categories, bot.categories)}</fieldset>
+<p class="muted">Core and raw API are always available. Connected agents receive changes immediately.</p>${toolCategoryPicker(state.categories, bot.categories)}</fieldset>
 <button>Save categories</button>
 </form>
 <details>
