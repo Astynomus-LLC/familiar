@@ -11,11 +11,18 @@ import {
   type Module,
 } from './types.js';
 import {
-  caseEmbed,
   duration,
   publishModeration,
   recordCase,
 } from './moderation-service.js';
+import { caseEmbed } from './presentation.js';
+import {
+  createPanel,
+  historyBody,
+  replyCase,
+  sendCase,
+  refreshCase,
+} from './components.js';
 import type { ModAction, ModCase } from '../storage/cases.js';
 const threshold = z.object({
   count: z.number().int().min(1),
@@ -99,7 +106,7 @@ export async function notify(
   if (config.dmSubject && user) {
     try {
       await user.send({
-        content: `${ctx.guild.name}: ${entry.action} — ${entry.reason}`,
+        embeds: [caseEmbed(entry, ctx, true)],
         allowedMentions: { parse: [] },
       });
     } catch {
@@ -110,16 +117,13 @@ export async function notify(
     try {
       const channel = await ctx.guild.channels.fetch(config.announceChannel);
       if (channel?.isTextBased() && 'send' in channel)
-        await channel.send({
-          embeds: [caseEmbed(entry)],
-          allowedMentions: { parse: [] },
-        });
+        await sendCase(ctx, entry, channel);
     } catch {
       ctx.logger('Case announcement delivery failed.');
     }
   }
 }
-async function checkHierarchy(
+export async function checkHierarchy(
   ctx: FeatureContext,
   i: any,
   member: any,
@@ -183,71 +187,6 @@ export async function escalate(
       'Warn escalation failed. Check role hierarchy and Discord permissions.',
     );
   }
-}
-async function history(
-  ctx: FeatureContext,
-  i: any,
-  userId: string,
-  config: any,
-) {
-  let before = Number.MAX_SAFE_INTEGER;
-  const page = () => {
-    const rows = ctx.store!.modCases(ctx.guild.id, userId, before, 6);
-    const shown = rows.slice(0, 5);
-    return {
-      body: {
-        content: `Server history for <@${userId}> · ${ctx.store!.activeWarnCount(ctx.guild.id, userId)} active warnings`,
-        embeds: shown.map(caseEmbed),
-        components:
-          rows.length > 5
-            ? [
-                {
-                  type: 1,
-                  components: [
-                    {
-                      type: 2,
-                      style: 2,
-                      label: 'Older cases',
-                      custom_id: 'modlogs:older',
-                    },
-                  ],
-                },
-              ]
-            : [],
-        allowedMentions: { parse: [] as never[] },
-      },
-      next: shown.at(-1)?.case_number,
-    };
-  };
-  let result = page();
-  const message = await i.editReply(result.body);
-  if (
-    !message.createMessageComponentCollector ||
-    !result.body.components.length
-  )
-    return;
-  const collector = message.createMessageComponentCollector({
-    time: 300000,
-    filter: (click: any) =>
-      click.user.id === i.user.id && click.customId === 'modlogs:older',
-  });
-  collector.on('collect', (click: any) => {
-    void (async () => {
-      if (!ctx.active() || !allowed(click, config, 'modlogs')) {
-        await click.reply({
-          content: 'Moderation access is no longer available.',
-          ephemeral: true,
-        });
-        return;
-      }
-      before = result.next ?? 0;
-      result = page();
-      await click.update(result.body);
-    })().catch(() => ctx.logger('Case pagination failed.'));
-  });
-  collector.on('end', () => {
-    void i.editReply({ components: [] }).catch(() => {});
-  });
 }
 const userOption = {
   type: O.User as const,
@@ -343,7 +282,7 @@ export const moderationFeature: Feature = {
           const number = i.options.getInteger('case-number', true);
           const entry =
             name === 'voidcase'
-              ? ctx.store!.voidCase(ctx.guild.id, number)
+              ? ctx.store!.voidCase(ctx.guild.id, number, i.user.id)
               : ctx.store!.modCase(ctx.guild.id, number);
           if (!entry) throw new Error('Case not found in this server.');
           if (name === 'voidcase') {
@@ -357,7 +296,8 @@ export const moderationFeature: Feature = {
             });
             await publishModeration(ctx, { ...entry, action: 'voidcase' });
           }
-          await i.editReply({ embeds: [caseEmbed(entry)] });
+          await replyCase(ctx, entry, i);
+          if (name === 'voidcase') await refreshCase(ctx, number);
           return;
         }
         const user =
@@ -365,7 +305,13 @@ export const moderationFeature: Feature = {
         const userId =
           user?.id ?? snowflake.parse(i.options.getString('user-id', true));
         if (name === 'modlogs') {
-          await history(ctx, i, userId, config);
+          const id = createPanel(ctx, {
+            kind: 'history',
+            user: userId,
+            invoker: i.user.id,
+            expires: Date.now() + 900000,
+          });
+          await i.editReply(historyBody(ctx, id, userId));
           return;
         }
         const member =
@@ -406,10 +352,12 @@ export const moderationFeature: Feature = {
           user ?? (await ctx.client.users.fetch(userId).catch(() => null)),
           config,
         );
-        await i.editReply({
-          content: `Case #${entry.case_number}: ${name} recorded.`,
-          allowedMentions: { parse: [] },
-        });
+        await replyCase(
+          ctx,
+          entry,
+          i,
+          `Case #${entry.case_number}: ${name} recorded.`,
+        );
         if (name === 'warn') await escalate(ctx, member, config, warnCount);
       } catch (error) {
         ctx.logger(

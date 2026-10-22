@@ -102,7 +102,10 @@ function setup(contentIntent = true) {
     member,
     content,
     channelId: '50',
-    channel: { permissionsFor: () => ({ has: () => true }) },
+    channel: {
+      permissionsFor: () => ({ has: () => true }),
+      send: async () => ({ delete: async () => {} }),
+    },
     delete: async () => {
       calls.push(['delete']);
     },
@@ -170,6 +173,9 @@ test('automod deletes and warns, emits logging hook, honors exemptions and store
     assert.deepEqual(entry.metadata, {
       feature: 'word-filter',
       matched: 'bad',
+      channel: '<#50>',
+      jump: '',
+      outcome: 'delete_and_warn',
     });
     assert.ok(!JSON.stringify(entry).includes('private message text'));
     assert.ok(f.calls.some((c) => c[0] === 'hook'));
@@ -245,7 +251,9 @@ test('warn runtime permissions, per-guild sequence/history, DM, void, and escala
     await f.command('warn');
     assert.equal(f.store.modCases('10')[0].case_number, 1);
     assert.ok(
-      f.calls.some((c) => c[0] === 'dm' && c[1].content.includes('Server A')),
+      f.calls.some(
+        (c) => c[0] === 'dm' && c[1].embeds[0].title.includes('Server A'),
+      ),
     );
     assert.ok(
       f.calls.some(
@@ -546,7 +554,11 @@ test('agent warnings share notifications and escalations and respect disabled mo
             discord.calls.some(
               (c) =>
                 c[0] === 'dm' &&
-                c[1].content === 'Server A: warn — Agent warning',
+                c[1].embeds[0].title.includes('Server A') &&
+                c[1].embeds[0].fields.some(
+                  (field: any) =>
+                    field.name === 'Reason' && field.value === 'Agent warning',
+                ),
             ),
           );
         else assert.ok(!discord.calls.some((c) => c[0] === 'dm'));

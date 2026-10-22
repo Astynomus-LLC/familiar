@@ -1,4 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Discord event tuples have different payload shapes; the registry is the dynamic dispatch boundary. */
+import { embed } from './presentation.js';
+import { sendCase } from './components.js';
+import type { ModCase } from '../storage/cases.js';
 import { z } from 'zod';
 import { AuditLogEvent } from 'discord.js';
 import type { Feature, FeatureContext, Module } from './types.js';
@@ -161,7 +164,17 @@ async function log(
   if (!ctx.active()) return;
   await channel.send({
     embeds: [
-      { title, fields, timestamp: new Date().toISOString(), color: 0x8b7cf8 },
+      embed(
+        title,
+        fields,
+        event === 'guildBanAdd' || title === 'Member banned'
+          ? 'ban'
+          : event === 'guildBanRemove'
+            ? 'unban'
+            : title === 'Member kicked'
+              ? 'kick'
+              : 'info',
+      ),
     ],
     allowedMentions: { parse: [] },
   });
@@ -273,18 +286,30 @@ export async function logModeration(
   );
   if (!channel?.isTextBased() || !('send' in channel))
     throw new Error('Log channel unavailable');
-  await channel.send({
-    embeds: [
-      {
-        title: `Moderation · ${String(event.action)}`,
-        fields: Object.entries(event)
-          .filter(([key]) =>
-            ['case_number', 'user_id', 'actor', 'reason'].includes(key),
-          )
-          .map(([name, value]) => ({ name, value: clip(value) })),
-        timestamp: new Date().toISOString(),
-      },
-    ],
-    allowedMentions: { parse: [] },
-  });
+  if (event.case_number) {
+    await sendCase(ctx, event as unknown as ModCase, channel);
+  } else {
+    await channel.send({
+      embeds: [
+        embed(
+          `Auto Moderation · ${String(event.action)}`,
+          Object.entries(event)
+            .filter(([key]) =>
+              [
+                'user_id',
+                'actor',
+                'reason',
+                'channel',
+                'feature',
+                'matched',
+                'jump',
+              ].includes(key),
+            )
+            .map(([name, value]) => ({ name, value: clip(value) })),
+          'automod',
+        ),
+      ],
+      allowedMentions: { parse: [] },
+    });
+  }
 }

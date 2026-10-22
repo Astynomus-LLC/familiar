@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Discord event payload boundary. */
+import { noticeEmbed } from './presentation.js';
 import { escalate, moderationModule } from './moderation.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -42,9 +43,15 @@ export const automodModule: Module = {
     exemptChannels: z.array(snowflake).default([]),
     ignoreBots: z.boolean().default(true),
     defaultAction: action.default('delete'),
+    noticeTtlSeconds: z.number().min(0.01).max(300).default(8),
     timeoutSeconds: z.number().int().min(1).max(2419200).default(3600),
   }),
   fields: {
+    noticeTtlSeconds: field(
+      'number',
+      'Notice lifetime (seconds)',
+      'Delete in-channel notices after this many seconds (default 8).',
+    ),
     exemptRoles: field('roles', 'Exempt roles'),
     exemptChannels: field('channels', 'Exempt channels'),
     ignoreBots: field('toggle', 'Ignore other bots'),
@@ -335,6 +342,10 @@ export const automodFeatures: Feature[] = rules.map((rule) => ({
             actor: `automod:${rule.id}`,
             action: chosen === 'delete_and_warn' ? 'warn' : chosen,
             reason,
+            channel: `<#${m.channelId}>`,
+            feature: rule.id,
+            matched: match,
+            jump: m.url ?? '',
           };
           if (chosen !== 'delete') {
             const entry = recordCase(ctx, {
@@ -349,7 +360,13 @@ export const automodFeatures: Feature[] = rules.map((rule) => ({
                 chosen === 'timeout'
                   ? new Date(Date.now() + c.timeoutSeconds * 1000).toISOString()
                   : null,
-              metadata: { feature: rule.id, matched: match },
+              metadata: {
+                feature: rule.id,
+                matched: match,
+                channel: `<#${m.channelId}>`,
+                jump: m.url ?? '',
+                outcome: chosen,
+              },
             });
             const warnCount =
               entry.action === 'warn'
@@ -371,6 +388,18 @@ export const automodFeatures: Feature[] = rules.map((rule) => ({
           } else {
             ctx.logger('success: delete');
             await publishModeration(ctx, event);
+          }
+          try {
+            const notice = await m.channel.send({
+              embeds: [noticeEmbed(rule.id, chosen)],
+              allowedMentions: { parse: [] },
+            });
+            const timer = setTimeout(() => {
+              void notice.delete().catch(() => {});
+            }, c.noticeTtlSeconds * 1000);
+            timer.unref();
+          } catch {
+            ctx.logger('Auto moderation notice delivery failed.');
           }
         } catch {
           ctx.logger(

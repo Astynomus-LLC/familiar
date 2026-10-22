@@ -149,7 +149,7 @@ export function mountAdmin(
         .int()
         .positive()
         .parse(req.params.number);
-      const entry = store.voidCase(guild.id, number);
+      const entry = store.voidCase(guild.id, number, auth.person(req)!.id);
       store.audit({
         timestamp: new Date().toISOString(),
         key: auth.person(req)!.id,

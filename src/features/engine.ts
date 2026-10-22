@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Discord event tuples have different payload shapes; the registry is the dynamic dispatch boundary. */
 import type { Client, Guild } from 'discord.js';
 import type { Bot, Store } from '../storage/store.js';
+import { routeComponent, refreshCase } from './components.js';
 import { features } from './registry.js';
 import {
   gatewaySettings,
@@ -12,6 +13,7 @@ export class FeatureEngine {
   private readonly listeners: [string, (...args: any[]) => void][] = [];
   private closed = false;
   private queue = Promise.resolve();
+  private componentQueue = Promise.resolve();
   constructor(
     private store: Store,
     private bot: Bot,
@@ -34,7 +36,25 @@ export class FeatureEngine {
     client.on('clientReady', this.sync);
     client.on('guildCreate', this.sync);
     store.on('featuresChanged', this.changed);
+    store.on('caseChanged', this.caseChanged);
   }
+  private caseChanged = (entry: { guild_id: string; case_number: number }) => {
+    const guild = this.client.guilds?.cache.get(entry.guild_id);
+    if (this.closed || !guild) return;
+    const ctx = this.context(
+      {
+        botId: this.bot.id,
+        guildId: guild.id,
+        featureId: 'moderation.commands',
+        enabled: true,
+        config: {},
+      },
+      guild,
+    );
+    void refreshCase(ctx, entry.case_number).catch(() => {
+      if (!this.closed) ctx.logger('Case panel refresh failed.');
+    });
+  };
   private changed = (instance: FeatureInstance) => {
     if (instance.botId === this.bot.id) this.sync();
   };
@@ -101,6 +121,33 @@ export class FeatureEngine {
     if (this.closed) return;
     const guild = args.find((arg) => arg?.guild)?.guild as Guild | undefined;
     if (!guild) return;
+    if (name === 'interactionCreate' && args[0].customId?.startsWith('fam:')) {
+      const ctx = this.context(
+        {
+          botId: this.bot.id,
+          guildId: guild.id,
+          featureId: 'moderation.commands',
+          enabled: true,
+          config: {},
+        },
+        guild,
+      );
+      this.componentQueue = this.componentQueue
+        .then(() => routeComponent(ctx, args[0]))
+        .catch(async () => {
+          ctx.logger('Component action failed.');
+          const i = args[0];
+          const body = {
+            content:
+              'Unable to complete this action. Check permissions and role hierarchy, then try again.',
+            components: [],
+          };
+          if (i.deferred || i.replied) await i.editReply(body).catch(() => {});
+          else await i.reply({ ...body, ephemeral: true }).catch(() => {});
+        });
+      await this.componentQueue;
+      return;
+    }
     const intents = gatewaySettings.parse(this.bot).intents;
     await Promise.all(
       this.store
@@ -214,5 +261,6 @@ export class FeatureEngine {
     this.client.off('clientReady', this.sync);
     this.client.off('guildCreate', this.sync);
     this.store.off('featuresChanged', this.changed);
+    this.store.off('caseChanged', this.caseChanged);
   }
 }

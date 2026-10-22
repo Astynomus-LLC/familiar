@@ -133,13 +133,33 @@ export class Store extends EventEmitter {
         .get(guildId, userId)!.count,
     );
   }
-  voidCase(guildId: string, number: number): ModCase | undefined {
+  voidCase(
+    guildId: string,
+    number: number,
+    actor?: string,
+  ): ModCase | undefined {
     this.db
       .prepare(
         'UPDATE mod_cases SET active = 0 WHERE guild_id = ? AND case_number = ?',
       )
       .run(guildId, number);
-    return this.modCase(guildId, number);
+    if (actor) this.caseMetadata(guildId, number, { voidedBy: actor });
+    const entry = this.modCase(guildId, number);
+    if (entry) this.emit('caseChanged', entry);
+    return entry;
+  }
+  caseMetadata(
+    guildId: string,
+    number: number,
+    values: Record<string, string>,
+  ) {
+    const entry = this.modCase(guildId, number);
+    if (entry)
+      this.db
+        .prepare(
+          'UPDATE mod_cases SET metadata = ? WHERE guild_id = ? AND case_number = ?',
+        )
+        .run(JSON.stringify({ ...entry.metadata, ...values }), guildId, number);
   }
 
   private migrateModules(): void {

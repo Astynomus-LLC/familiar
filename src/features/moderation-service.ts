@@ -37,16 +37,7 @@ export function recordCase(
   });
   return entry;
 }
-export const caseEmbed = (entry: ModCase) => ({
-  title: `Case #${entry.case_number} · ${entry.action}${entry.active ? '' : ' · void'}`,
-  description: entry.reason.slice(0, 4000),
-  fields: [
-    { name: 'Subject', value: entry.user_id },
-    { name: 'Actor', value: entry.actor },
-    ...(entry.expires_at ? [{ name: 'Expires', value: entry.expires_at }] : []),
-  ],
-  timestamp: entry.created_at,
-});
+export { caseEmbed } from './presentation.js';
 export function duration(value: string): number {
   const match = /^(\d+)(s|m|h|d)$/.exec(value);
   const ms = match

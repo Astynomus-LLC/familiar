@@ -176,7 +176,20 @@ it and removes it from active counts; it does not reverse a Discord ban or timeo
 Agent ban/kick/timeout/unban tools also create cases labeled with the API key name.
 No automod message content is saved: cases contain only the rule and matched term
 or pattern type. Moderation actions use Logging's Member moderation destination;
-the Moderation module can additionally DM subjects and announce cases.
+the Moderation module can additionally DM subjects and announce cases. These
+surfaces share action colors, subject identity, case footers, and status fields.
+Automod posts a compact in-channel notice, removed after `noticeTtlSeconds`
+(default 8), and includes the channel, matched term, and message link in its log.
+Delete-only automod retains its existing behavior of recording no case.
+
+`/modlogs` has previous/next buttons and an action filter. The invoking moderator
+and members with Moderate Members can use the history panel. Case posts include a
+Void case confirmation; automod case logs also offer 10m, 1h, 6h, or 24h timeouts.
+Follow-up timeouts create a separate case attributed to the clicking moderator and
+link both case numbers. Buttons re-fetch permissions and case state on every click.
+Panel references live in SQLite, so persistent posts work across restarts;
+ephemeral command panels expire after 15 minutes. Voids refresh tracked case posts
+and remove their action buttons.
 
 The Moderation page has a server-scoped case browser with user ID filtering,
 newest-first pagination, and audited void actions for owners/members. The
