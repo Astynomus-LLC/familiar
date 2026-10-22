@@ -59,6 +59,8 @@ export class FeatureEngine {
     const module = this.module(instance);
 
     return {
+      store: this.store,
+      bot: this.bot,
       client: this.client,
       guild,
       config: { ...module.config, ...instance.config },
@@ -67,10 +69,19 @@ export class FeatureEngine {
         .filter((i) => i.enabled && this.module(i).enabled)
         .map((i) => i.featureId),
       intents: gatewaySettings.parse(this.bot).intents,
-      logger: (message) =>
+      logger: (message) => {
+        this.store.audit({
+          timestamp: new Date().toISOString(),
+          key: `feature:${instance.featureId}`,
+          bot: this.bot,
+          tool: instance.featureId,
+          target: guild.id,
+          result: message,
+        });
         console.error(
           `Bot ${this.bot.slug}, guild ${guild.id}, feature ${instance.featureId}: ${message}`,
-        ),
+        );
+      },
       active: () =>
         !this.closed &&
         this.module(instance).enabled &&
@@ -188,6 +199,8 @@ export class FeatureEngine {
         const created = await guild.commands.create({
           name: command.name,
           description: command.description,
+          options: command.options,
+          defaultMemberPermissions: command.defaultMemberPermissions,
         });
         owned[command.name] = { id: created.id, feature: command.feature };
         this.store.setSetting(key, owned);

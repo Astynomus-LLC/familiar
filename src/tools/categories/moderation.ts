@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { guild, member } from '../params.js';
+const subject = member.extend({ reason: z.string().max(1000).optional() });
 import { restTool, type Category } from '../types.js';
 
 export const moderation: Category = {
@@ -17,7 +18,7 @@ export const moderation: Category = {
       name: 'moderation_ban',
       description: 'Ban a member.',
       method: 'PUT',
-      schema: member.extend({
+      schema: subject.extend({
         delete_message_seconds: z.number().int().min(0).max(604800).default(0),
       }),
       path: (a) => `/guilds/${a.guild_id}/bans/${a.user_id}`,
@@ -28,7 +29,7 @@ export const moderation: Category = {
       name: 'moderation_unban',
       description: 'Remove a ban.',
       method: 'DELETE',
-      schema: member,
+      schema: subject,
       path: (a) => `/guilds/${a.guild_id}/bans/${a.user_id}`,
       destructive: true,
     }),
@@ -36,7 +37,7 @@ export const moderation: Category = {
       name: 'moderation_kick',
       description: 'Kick a member.',
       method: 'DELETE',
-      schema: member,
+      schema: subject,
       path: (a) => `/guilds/${a.guild_id}/members/${a.user_id}`,
       destructive: true,
     }),
@@ -44,7 +45,7 @@ export const moderation: Category = {
       name: 'moderation_timeout',
       description: 'Set a member timeout, or null to clear it.',
       method: 'PATCH',
-      schema: member.extend({ until: z.iso.datetime().nullable() }),
+      schema: subject.extend({ until: z.iso.datetime().nullable() }),
       path: (a) => `/guilds/${a.guild_id}/members/${a.user_id}`,
       body: (a) => ({ communication_disabled_until: a.until }),
       destructive: true,

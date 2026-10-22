@@ -6,6 +6,15 @@ export const featureTools: Category = {
   description: 'Configure autonomous features per bot and server',
   tools: [
     {
+      name: 'get_modlogs',
+      description:
+        'Get recent cases and active warn count for a user in one server.',
+      schema: z.object({ guild: z.string(), user: z.string().regex(/^\d+$/) }),
+      mutating: false,
+      execute: ({ bot, manager }, args) =>
+        manager.getModlogs(bot, String(args.guild), String(args.user)),
+    },
+    {
       name: 'set_module_enabled',
       description:
         'Suspend or restore a module without changing individual feature settings.',

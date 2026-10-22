@@ -1,6 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Discord event tuples have different payload shapes; the registry is the dynamic dispatch boundary. */
 import { z } from 'zod';
-import type { Client, Guild } from 'discord.js';
+import type { Store, Bot } from '../storage/store.js';
+import type {
+  ApplicationCommandOptionData,
+  PermissionResolvable,
+  Client,
+  Guild,
+} from 'discord.js';
 export const intentNames = [
   'Guilds',
   'GuildMessages',
@@ -25,6 +31,8 @@ export interface FeatureInstance {
   config: Record<string, unknown>;
 }
 export interface FeatureContext {
+  store?: Store;
+  bot?: Bot;
   enabledFeatures: string[];
   client: Client;
   guild: Guild;
@@ -35,6 +43,8 @@ export interface FeatureContext {
 }
 export interface ConfigField {
   type:
+    | 'list'
+    | 'thresholds'
     | 'toggle'
     | 'text'
     | 'textarea'
@@ -79,6 +89,8 @@ export interface Feature {
   slashCommands?: {
     name: string;
     description: string;
+    options?: ApplicationCommandOptionData[];
+    defaultMemberPermissions?: PermissionResolvable;
     handle: (context: FeatureContext, interaction: any) => Promise<void>;
   }[];
   messageCommands?: {

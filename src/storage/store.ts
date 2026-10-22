@@ -1,3 +1,4 @@
+import type { ModCase, NewCase } from './cases.js';
 import type {
   FeatureInstance,
   ModuleInstance,
@@ -62,9 +63,83 @@ export class Store extends EventEmitter {
       CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS feature_instances (botId TEXT NOT NULL, guildId TEXT NOT NULL, featureId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(botId, guildId, featureId));
       CREATE TABLE IF NOT EXISTS module_instances (botId TEXT NOT NULL, guildId TEXT NOT NULL, moduleId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(botId, guildId, moduleId));
+      CREATE TABLE IF NOT EXISTS mod_cases (
+        case_number INTEGER NOT NULL, bot_id TEXT NOT NULL, guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
+        reason TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT,
+        active INTEGER NOT NULL DEFAULT 1, metadata TEXT NOT NULL,
+        PRIMARY KEY(guild_id, case_number));
+      CREATE INDEX IF NOT EXISTS mod_cases_subject ON mod_cases(guild_id, user_id, created_at);
       CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
     `);
     this.migrateModules();
+  }
+
+  createCase(input: NewCase): ModCase {
+    // A single INSERT allocates the guild sequence under SQLite's write lock.
+    const row = this.db
+      .prepare(
+        `INSERT INTO mod_cases
+      SELECT COALESCE(MAX(case_number), 0) + 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?
+      FROM mod_cases WHERE guild_id = ? RETURNING *`,
+      )
+      .get(
+        input.bot_id,
+        input.guild_id,
+        input.user_id,
+        input.actor,
+        input.action,
+        input.reason,
+        new Date().toISOString(),
+        input.expires_at ?? null,
+        JSON.stringify(input.metadata ?? {}),
+        input.guild_id,
+      )!;
+    return this.decodeCase(row);
+  }
+  private decodeCase(row: Record<string, unknown>): ModCase {
+    return {
+      ...row,
+      active: Boolean(row.active),
+      metadata: JSON.parse(String(row.metadata)),
+    } as ModCase;
+  }
+  modCases(
+    guildId: string,
+    userId?: string,
+    before = Number.MAX_SAFE_INTEGER,
+    limit = 25,
+  ): ModCase[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM mod_cases WHERE guild_id = ?
+      AND (? IS NULL OR user_id = ?) AND case_number < ? ORDER BY case_number DESC LIMIT ?`,
+      )
+      .all(guildId, userId ?? null, userId ?? null, before, limit)
+      .map((r) => this.decodeCase(r));
+  }
+  modCase(guildId: string, number: number): ModCase | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM mod_cases WHERE guild_id = ? AND case_number = ?')
+      .get(guildId, number);
+    return row ? this.decodeCase(row) : undefined;
+  }
+  activeWarnCount(guildId: string, userId: string): number {
+    return Number(
+      this.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM mod_cases WHERE guild_id = ? AND user_id = ? AND action = 'warn' AND active = 1",
+        )
+        .get(guildId, userId)!.count,
+    );
+  }
+  voidCase(guildId: string, number: number): ModCase | undefined {
+    this.db
+      .prepare(
+        'UPDATE mod_cases SET active = 0 WHERE guild_id = ? AND case_number = ?',
+      )
+      .run(guildId, number);
+    return this.modCase(guildId, number);
   }
 
   private migrateModules(): void {

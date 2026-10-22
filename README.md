@@ -130,7 +130,7 @@ submissions. [Built by Astynomus](https://astynomus.com) — see our other produ
 
 ## Autonomous server features
 
-Logging, autorole, and welcome run without an agent connection. Open **Bots →
+Logging, auto moderation, autorole, and welcome run without an agent connection. Open **Bots →
 a bot → Servers → a server** to see its module overview. The server stays selected
 while you navigate modules. Each module’s master switch suspends its features
 without changing their individual switches or settings. Modules default to on;
@@ -144,14 +144,45 @@ URLs preserve the selected bot, server, and module. The overview refreshes when
 another owner or MCP agent changes configuration.
 
 `list_features` returns modules, shared config, individual feature state, effective
-state, and missing intents. `configure_module` patches shared settings and
+state, missing intents, and missing moderation permissions. `configure_module` patches shared settings and
 `set_module_enabled` suspends or restores a module. `configure_feature` patches
 individual settings; `set_feature_enabled` changes an individual switch. For
 example, configure module `logging` with `channelId`, then enable feature
-`logging.messageDeleted`. All feature tools accept a guild ID, an unambiguous name,
+`logging.messageDeleted`. Configuration tools accept a guild ID, an unambiguous name,
 or `all` for the current servers. Bulk changes are validated before being saved;
 they do not affect servers joined later. The `features` tool category is
 independently toggleable, and all its mutations are audited.
+
+Auto Moderation (`automod`) includes word, link, attachment, mention, caps, and
+repeat filters. Enable GuildMessages and MessageContent to process messages.
+Shared exemptions select roles/channels; actions inherit the module default or
+can override it per filter. Word and domain lists use one entry per line. Timeout
+values are seconds. The repeat filter keeps bounded, in-memory hashes and resets
+on reconnect. Discord role hierarchy and action permissions still apply.
+
+Enable `moderation.commands` to register `/ban`, `/kick`, `/warn`, `/timeout`,
+`/untimeout`, `/unban`, `/modlogs`, `/case`, and `/voidcase` in that server. Turning
+the module off removes its owned commands. Commands have Discord permission
+defaults and recheck permissions at runtime. Optional moderator roles bypass the
+runtime permission requirement; use Discord Server Settings → Integrations to
+grant those roles command visibility when needed. The bot and moderator must
+outrank the subject. Timeout durations use `s`, `m`, `h`, or `d`, up to 28 days;
+`/ban delete-messages` specifies seconds of history to delete, up to seven days.
+
+Moderation cases are stored in `mod_cases`, numbered per server across bots.
+Automod warnings and human warnings contribute to that server's active warn count;
+configured thresholds produce separate escalation cases. Voiding a case preserves
+it and removes it from active counts; it does not reverse a Discord ban or timeout.
+Agent ban/kick/timeout/unban tools also create cases labeled with the API key name.
+No automod message content is saved: cases contain only the rule and matched term
+or pattern type. Moderation actions use Logging's Member moderation destination;
+the Moderation module can additionally DM subjects and announce cases.
+
+The Moderation page has a server-scoped case browser with user ID filtering,
+newest-first pagination, and audited void actions for owners/members. The
+`get_modlogs` feature tool accepts `guild` (one server ID or unambiguous name) and
+`user` (ID), returning recent cases and active warnings. An optional `bot` uses the
+same scoped bot selection as other tools. Case history never spans servers.
 
 On startup, a versioned SQLite transaction migrates v1.1 logging into shared module
 config and seven individual features. The old logging enabled state becomes the

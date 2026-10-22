@@ -195,6 +195,7 @@ export class Session {
         },
         args,
       );
+      await this.manager.recordAgentModeration(bot, name, args, keyLabel);
       if (name === 'set_active_bot') bot = this.resolve();
       outcome = 'success';
       return this.result(bot, result);

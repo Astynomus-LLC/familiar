@@ -1,11 +1,21 @@
+import { automodFeatures, automodModule } from './automod.js';
+import { moderationFeature, moderationModule } from './moderation.js';
 import { z } from 'zod';
 import { loggingFeatures, loggingModule } from './logging.js';
 import { autorole } from './autorole.js';
 import { welcome } from './welcome.js';
 import type { Feature, Module } from './types.js';
-export const features: Feature[] = [...loggingFeatures, autorole, welcome];
+export const features: Feature[] = [
+  ...loggingFeatures,
+  ...automodFeatures,
+  moderationFeature,
+  autorole,
+  welcome,
+];
 export const modules: Module[] = [
   loggingModule,
+  automodModule,
+  moderationModule,
   {
     id: 'members',
     label: 'Members',

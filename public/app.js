@@ -3,6 +3,8 @@ import {
   serverView,
   gatewayForm,
   featureConfig,
+  casesView,
+  thresholdRow,
   refreshMultiPicker,
 } from './features.js';
 import { clientSetup, checkConnection } from './client-setup.js';
@@ -148,6 +150,10 @@ async function buildView(page) {
               else resources.error = result.reason.message;
             });
           }
+          if (moduleId === 'moderation')
+            resources.cases = await api(
+              `/api/admin/bots/${slug}/servers/${guildId}/cases`,
+            );
           main.innerHTML = serverView(
             bot,
             serverGuilds,
@@ -228,6 +234,18 @@ async function submit(form) {
     });
     notice('Token validated. Bot saved.');
   }
+  if (kind === 'case-filter') {
+    const result = await api(
+      `/api/admin/bots/${form.dataset.slug}/servers/${form.dataset.guild}/cases?user=${encodeURIComponent(values.user)}`,
+    );
+    document.querySelector('#case-browser').outerHTML = casesView(
+      result,
+      { slug: form.dataset.slug },
+      { id: form.dataset.guild },
+      values.user,
+    );
+    return;
+  }
   if (kind === 'categories') {
     await api(`/api/admin/bots/${form.dataset.slug}`, 'PATCH', {
       categories: data.getAll('categories'),
@@ -305,6 +323,31 @@ async function submit(form) {
 
 async function action(button) {
   const { action, slug, id, role, before } = button.dataset;
+  if (action === 'add-threshold') {
+    button
+      .closest('fieldset')
+      .querySelector('.threshold-rows')
+      .insertAdjacentHTML('beforeend', thresholdRow());
+    return;
+  }
+  if (action === 'remove-threshold') {
+    button.closest('.threshold-row').remove();
+    return;
+  }
+  if (action === 'void-case' || action === 'older-cases') {
+    const base = `/api/admin/bots/${slug}/servers/${button.dataset.guild}/cases`;
+    if (action === 'void-case') await api(`${base}/${id}/void`, 'POST', {});
+    const result = await api(
+      `${base}?user=${encodeURIComponent(button.dataset.user ?? '')}${action === 'older-cases' ? `&before=${before}` : ''}`,
+    );
+    document.querySelector('#case-browser').outerHTML = casesView(
+      result,
+      { slug },
+      { id: button.dataset.guild },
+      button.dataset.user,
+    );
+    return;
+  }
   if (action === 'toggle-module' || action === 'toggle-feature') {
     const isModule = action === 'toggle-module';
     const enabled = button.dataset.enabled === 'true';

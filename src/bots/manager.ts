@@ -1,3 +1,5 @@
+import type { ModAction, ModCase } from '../storage/cases.js';
+import { publishModeration } from '../features/moderation-service.js';
 import { z } from 'zod';
 import { FeatureEngine } from '../features/engine.js';
 import { features, modules } from '../features/registry.js';
@@ -15,6 +17,7 @@ import {
 } from '@discordjs/voice';
 import {
   Client,
+  PermissionFlagsBits,
   GatewayIntentBits,
   REST,
   RequestMethod,
@@ -387,6 +390,83 @@ export class BotManager {
     return matches;
   }
 
+  async getModlogs(
+    bot: Bot,
+    address: string,
+    userId?: string,
+    before?: number,
+  ) {
+    if (address === 'all') throw new Error('Select one guild.');
+    const [guild] = await this.resolveGuilds(bot, address);
+    return {
+      cases: this.store.modCases(guild.id, userId, before),
+      activeWarnCount: userId
+        ? this.store.activeWarnCount(guild.id, userId)
+        : null,
+    };
+  }
+
+  async publishCase(bot: Bot, entry: ModCase) {
+    const client = this.connections.get(bot.slug)?.client;
+    if (!client) return;
+    try {
+      const guild = await client.guilds.fetch(entry.guild_id);
+      await publishModeration(
+        {
+          store: this.store,
+          bot,
+          client,
+          guild,
+          config: {},
+          enabledFeatures: [],
+          intents: gatewaySettings.parse(bot).intents,
+          active: () => true,
+          logger: (message) =>
+            this.store.audit({
+              timestamp: new Date().toISOString(),
+              key: entry.actor,
+              bot,
+              tool: 'moderation_log',
+              target: entry.guild_id,
+              result: message,
+            }),
+        },
+        { ...entry },
+      );
+    } catch {
+      /* The action and case succeeded even when gateway logging is unavailable. */
+    }
+  }
+
+  async recordAgentModeration(
+    bot: Bot,
+    name: string,
+    args: Record<string, unknown>,
+    label: string,
+  ) {
+    const actions: Record<string, ModAction> = {
+      moderation_ban: 'ban',
+      moderation_unban: 'unban',
+      moderation_kick: 'kick',
+      moderation_timeout: args.until === null ? 'untimeout' : 'timeout',
+    };
+    const action = actions[name];
+    if (!action) return;
+    const entry = this.store.createCase({
+      bot_id: bot.id,
+      guild_id: String(args.guild_id),
+      user_id: String(args.user_id),
+      actor: `agent:${label}`,
+      action,
+      reason:
+        typeof args.reason === 'string'
+          ? args.reason
+          : 'Agent moderation action',
+      expires_at: action === 'timeout' ? String(args.until) : null,
+    });
+    await this.publishCase(bot, entry);
+  }
+
   featureStates(bot: Bot, guildId: string) {
     const instances = this.store.featureInstances(bot.id, guildId);
     return features.map((feature) => {
@@ -402,6 +482,38 @@ export class BotManager {
         (i) => !gatewaySettings.parse(bot).intents.includes(i),
       );
       const module = this.store.moduleInstance(bot.id, guildId, feature.module);
+      const config = { ...shared.config, ...instance?.config };
+      const action =
+        config.action && config.action !== 'inherit'
+          ? config.action
+          : (config.defaultAction ?? 'delete');
+      const requiredPermissions =
+        feature.module === 'automod'
+          ? [
+              ...(action === 'delete' || action === 'delete_and_warn'
+                ? ['ManageMessages' as const]
+                : []),
+              ...(action === 'warn' ||
+              action === 'delete_and_warn' ||
+              action === 'timeout'
+                ? ['ModerateMembers' as const]
+                : []),
+              ...(action === 'kick' ? ['KickMembers' as const] : []),
+            ]
+          : feature.module === 'moderation'
+            ? (['BanMembers', 'KickMembers', 'ModerateMembers'] as const)
+            : [];
+      const me = this.connections
+        .get(bot.slug)
+        ?.client?.guilds?.cache?.get(guildId)?.members.me;
+      const missingPermissions = me
+        ? requiredPermissions.filter(
+            (p) =>
+              !me.permissions.has(
+                PermissionFlagsBits[p as keyof typeof PermissionFlagsBits],
+              ),
+          )
+        : [];
       return {
         module: feature.module,
         label: feature.label,
@@ -417,11 +529,12 @@ export class BotManager {
         enabled: instance?.enabled ?? false,
         config: instance?.config ?? null,
         missingIntents,
+        missingPermissions,
         state: !instance?.enabled
           ? 'disabled'
           : !module.enabled
             ? 'suspended'
-            : missingIntents.length
+            : missingIntents.length || missingPermissions.length
               ? 'degraded'
               : 'enabled',
       };

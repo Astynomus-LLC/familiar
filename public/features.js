@@ -16,7 +16,7 @@ export function serversView(bot, guilds) {
 const toggle = (bot, guild, item, module = false) =>
   `<button type="button" role="switch" aria-checked="${item.enabled}" aria-label="${escape(item.label)} enabled" class="switch" data-action="toggle-${module ? 'module' : 'feature'}" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}" data-id="${escape(module ? item.id : item.featureId)}" data-enabled="${!item.enabled}"><span></span></button>`;
 const glance = (module) =>
-  `<p class="muted">${module.features.filter((f) => f.enabled).length} of ${module.features.length} features on${!module.enabled ? ' · Module is off' : ''}</p>${module.features.some((f) => f.missingIntents.length) ? '<span class="badge offline">Degraded · missing intents</span>' : ''}`;
+  `<p class="muted">${module.features.filter((f) => f.enabled).length} of ${module.features.length} features on${!module.enabled ? ' · Module is off' : ''}</p>${module.features.some((f) => f.missingIntents.length || f.missingPermissions?.length) ? '<span class="badge offline">Degraded · missing intents or permissions</span>' : ''}`;
 const colorDot = (color) =>
   color
     ? `<svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="${/^#[0-9a-f]{6}$/i.test(color) ? color : '#888888'}"/></svg>`
@@ -27,8 +27,12 @@ function selectionPill(option) {
 function multiPicker(name, ui, options, selected) {
   const empty =
     ui.type === 'roles'
-      ? 'No roles selected. No roles will be assigned.'
-      : 'No channels selected. No channels are ignored.';
+      ? name === 'roleIds'
+        ? 'No roles selected. No roles will be assigned.'
+        : 'No roles selected.'
+      : name === 'ignoredChannelIds'
+        ? 'No channels selected. No channels are ignored.'
+        : 'No channels selected.';
   return `<fieldset class="multi-picker" data-name="config:${escape(name)}" data-empty="${escape(empty)}"><legend>${escape(ui.label)}</legend><select data-multi-add aria-label="${escape(ui.label)}"><option value="">${ui.type === 'roles' ? 'Add a role…' : 'Add a channel…'}</option>${options.map((o) => `<option value="${escape(o.value)}" data-label="${escape(o.label)}" data-color="${escape(o.color ?? '')}" ${selected.includes(o.value) ? 'disabled' : ''}>${escape(o.label)}</option>`).join('')}</select><div class="multi-values">${selected.map((id) => `<input type="hidden" name="config:${escape(name)}" value="${escape(id)}">`).join('')}</div><div class="selection-pills" aria-live="polite">${selected.length ? selected.map((id) => selectionPill(options.find((o) => o.value === id))).join('') : `<small>${empty}</small>`}</div><small>${escape(ui.help)}</small></fieldset>`;
 }
 export function refreshMultiPicker(picker) {
@@ -54,12 +58,24 @@ export function refreshMultiPicker(picker) {
     : `<small>${escape(picker.dataset.empty)}</small>`;
 }
 
+export function thresholdRow(
+  row = { count: 3, action: 'timeout', duration: '1h' },
+) {
+  return `<div class="threshold-row"><label>Active warnings<input data-count type="number" min="1" value="${escape(row.count)}"></label><label>Action<select data-escalation-action><option value="timeout" ${row.action === 'timeout' ? 'selected' : ''}>Timeout</option><option value="kick" ${row.action === 'kick' ? 'selected' : ''}>Kick</option></select></label><label>Timeout duration<input data-duration value="${escape(row.duration)}" placeholder="1h"></label><button type="button" data-action="remove-threshold">Remove</button></div>`;
+}
+export function casesView(result, bot, guild, user = '') {
+  return `<section class="panel" id="case-browser"><h3>Server cases</h3><form data-form="case-filter" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}"><label>User ID (optional)<input name="user" pattern="[0-9]*" value="${escape(user)}" placeholder="Paste a user ID"></label><button>Filter</button></form>${result.activeWarnCount === null ? '' : `<p>${result.activeWarnCount} active warnings</p>`}<div class="case-results">${result.cases.map((c) => `<article class="panel"><h4>#${c.case_number} · ${escape(c.action)} · ${c.active ? 'Active' : 'Void'}</h4><p>Subject: ${escape(c.user_id)} · Actor: ${escape(c.actor)}</p><p>${escape(c.reason)}</p><time>${escape(c.created_at)}</time>${c.expires_at ? `<p>Expires: ${escape(c.expires_at)}</p>` : ''}${c.active ? `<button type="button" data-action="void-case" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}" data-id="${c.case_number}" data-user="${escape(user)}">Void case</button>` : ''}</article>`).join('') || '<p>No cases in this server.</p>'}</div>${result.cases.length === 25 ? `<button type="button" data-action="older-cases" data-slug="${escape(bot.slug)}" data-guild="${escape(guild.id)}" data-user="${escape(user)}" data-before="${result.cases.at(-1).case_number}">Older cases</button>` : ''}</section>`;
+}
 function field(name, ui, schema, value, resources) {
   value ??= schema.default;
   const key = `config:${escape(name)}`;
   const label = escape(ui.label);
   let input;
-  if (ui.type === 'toggle')
+  if (ui.type === 'thresholds')
+    return `<fieldset data-thresholds="${key}"><legend>${label}</legend><div class="threshold-rows">${(value ?? []).map(thresholdRow).join('')}</div><button type="button" data-action="add-threshold">Add threshold</button><small>${escape(ui.help)}</small></fieldset>`;
+  if (ui.type === 'list')
+    input = `<textarea name="${key}" rows="5">${escape((value ?? []).join('\n'))}</textarea>`;
+  else if (ui.type === 'toggle')
     input = `<input type="checkbox" role="switch" name="${key}" ${value ? 'checked' : ''}>`;
   else if (
     ['channel', 'channels', 'role', 'roles', 'select'].includes(ui.type)
@@ -124,11 +140,11 @@ export function serverView(bot, guilds, guild, moduleId, resources) {
     .join('');
   const overview = `<h2>Modules</h2><p class="muted">Control your server’s features in one place. Turning a module off preserves its settings.</p><div class="grid">${guild.modules.map((m) => `<section class="panel module-card"><div class="row between"><h3>${escape(m.label)}</h3>${toggle(bot, guild, m, true)}</div><p>${escape(m.description)}</p>${glance(m)}<p><a href="${base(bot, guild)}/${escape(m.id)}">Configure ${escape(m.label)} →</a></p></section>`).join('')}</div>`;
   const content = module
-    ? `<div class="row between"><div><h2>${escape(module.label)}</h2><p>${escape(module.description)}</p></div>${toggle(bot, guild, module, true)}</div>${glance(module)}${Object.keys(module.fields).length ? `<section class="panel"><h3>Shared settings</h3>${configForm(bot, guild, module, resources, true)}</section>` : ''}${module.features.map((f) => `<section class="panel feature-card ${!module.enabled ? 'suspended' : ''}"><div class="row between"><h3>${escape(f.label)}</h3>${toggle(bot, guild, f)}</div><p>${escape(f.description)}</p>${!module.enabled ? '<p class="badge">Suspended · module is off</p>' : ''}${f.missingIntents.length ? `<p class="badge offline">Needs ${escape(f.missingIntents.map((i) => i.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', '))}</p>` : ''}${Object.keys(f.fields).length ? `<details ${f.enabled ? 'open' : ''}><summary>Configure ${escape(f.label)}</summary>${configForm(bot, guild, f, resources)}</details>` : ''}</section>`).join('')}`
+    ? `<div class="row between"><div><h2>${escape(module.label)}</h2><p>${escape(module.description)}</p></div>${toggle(bot, guild, module, true)}</div>${glance(module)}${Object.keys(module.fields).length ? `<section class="panel"><h3>Shared settings</h3>${configForm(bot, guild, module, resources, true)}</section>` : ''}${module.features.map((f) => `<section class="panel feature-card ${!module.enabled ? 'suspended' : ''}"><div class="row between"><h3>${escape(f.label)}</h3>${toggle(bot, guild, f)}</div><p>${escape(f.description)}</p>${!module.enabled ? '<p class="badge">Suspended · module is off</p>' : ''}${f.missingIntents.length ? `<p class="badge offline">Needs ${escape(f.missingIntents.map((i) => i.replace(/([a-z])([A-Z])/g, '$1 $2')).join(', '))}</p>` : ''}${f.missingPermissions?.length ? `<p class="badge offline">Missing permissions: ${escape(f.missingPermissions.join(', '))}</p>` : ''}${Object.keys(f.fields).length ? `<details ${f.enabled ? 'open' : ''}><summary>Configure ${escape(f.label)}</summary>${configForm(bot, guild, f, resources)}</details>` : ''}</section>`).join('')}`
     : moduleId
       ? '<p>Module not found.</p>'
       : overview;
-  return `<p><a href="#bots/${escape(bot.slug)}/servers">← ${escape(bot.name)} / Servers</a></p><header class="server-header panel"><div class="row">${guildIcon(guild)}<h1>${escape(guild.name)}</h1></div><label>Server<select id="server-switcher">${guilds.map((g) => `<option value="#bots/${escape(bot.slug)}/servers/${escape(g.id)}${moduleId ? `/${escape(moduleId)}` : ''}" ${g.id === guild.id ? 'selected' : ''}>${escape(g.name)}</option>`).join('')}</select></label></header><div class="server-layout"><nav class="module-nav" aria-label="Modules">${navigation}</nav><label class="module-picker">Module<select id="module-picker">${links.map((m) => `<option value="${base(bot, guild)}${m.id ? `/${escape(m.id)}` : ''}" ${m.id === (moduleId ?? '') ? 'selected' : ''}>${escape(m.label)}</option>`).join('')}</select></label><div>${resources.error ? `<p role="status">${escape(resources.error)}</p>` : ''}${content}</div></div>`;
+  return `<p><a href="#bots/${escape(bot.slug)}/servers">← ${escape(bot.name)} / Servers</a></p><header class="server-header panel"><div class="row">${guildIcon(guild)}<h1>${escape(guild.name)}</h1></div><label>Server<select id="server-switcher">${guilds.map((g) => `<option value="#bots/${escape(bot.slug)}/servers/${escape(g.id)}${moduleId ? `/${escape(moduleId)}` : ''}" ${g.id === guild.id ? 'selected' : ''}>${escape(g.name)}</option>`).join('')}</select></label></header><div class="server-layout"><nav class="module-nav" aria-label="Modules">${navigation}</nav><label class="module-picker">Module<select id="module-picker">${links.map((m) => `<option value="${base(bot, guild)}${m.id ? `/${escape(m.id)}` : ''}" ${m.id === (moduleId ?? '') ? 'selected' : ''}>${escape(m.label)}</option>`).join('')}</select></label><div>${resources.error ? `<p role="status">${escape(resources.error)}</p>` : ''}${content}${moduleId === 'moderation' && resources.cases ? casesView(resources.cases, bot, guild) : ''}</div></div>`;
 }
 export function featureConfig(form, fields) {
   const data = new FormData(form);
@@ -137,13 +153,30 @@ export function featureConfig(form, fields) {
       const key = `config:${name}`;
       return [
         name,
-        field.type === 'toggle'
-          ? data.has(key)
-          : ['channels', 'roles'].includes(field.type)
-            ? data.getAll(key)
-            : field.type === 'number'
-              ? Number(data.get(key))
-              : data.get(key),
+        field.type === 'thresholds'
+          ? [
+              ...form.querySelectorAll(
+                `[data-thresholds="${key}"] .threshold-row`,
+              ),
+            ].map((row) => ({
+              count: Number(row.querySelector('[data-count]').value),
+              action: row.querySelector('[data-escalation-action]').value,
+              duration: row.querySelector('[data-duration]').value,
+            }))
+          : field.type === 'list'
+            ? String(data.get(key) ?? '')
+                .split('\n')
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : field.type === 'toggle'
+              ? data.has(key)
+              : ['channels', 'roles'].includes(field.type)
+                ? data.getAll(key)
+                : field.type === 'number'
+                  ? data.get(key) === ''
+                    ? null
+                    : Number(data.get(key))
+                  : data.get(key),
       ];
     }),
   );

@@ -415,6 +415,77 @@ test('setup wizard through scoped key and client configuration', async ({
       ),
     ).toBe(true);
     await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/#bots/hello-bot/servers/10/automod');
+    await page.getByText('Configure Word filter', { exact: true }).click();
+    await page
+      .getByLabel('Words and phrases', { exact: false })
+      .fill('bad\nblocked phrase');
+    const wordForm = page.locator('form[data-id="automod.word-filter"]');
+    await wordForm
+      .getByLabel('Action', { exact: false })
+      .selectOption('delete_and_warn');
+    await wordForm.getByRole('button', { name: 'Save settings' }).click();
+    await page.reload();
+    await page.getByText('Configure Word filter', { exact: true }).click();
+    await expect(
+      page.getByLabel('Words and phrases', { exact: false }),
+    ).toHaveValue('bad\nblocked phrase');
+    await page.goto('/#bots/hello-bot/servers/10/moderation');
+    await page.getByRole('button', { name: 'Add threshold' }).click();
+    await page.getByLabel('Active warnings', { exact: true }).fill('3');
+    await page
+      .locator('form[data-form="module"]')
+      .getByRole('button', { name: 'Save settings' })
+      .click();
+    await page.reload();
+    await expect(
+      page.getByLabel('Active warnings', { exact: true }),
+    ).toHaveValue('3');
+    await expect(
+      page.getByRole('heading', { name: 'Server cases' }),
+    ).toBeVisible();
+    await page.request.patch('/api/admin/bots/hello-bot', {
+      headers: { Origin: 'http://localhost:3210' },
+      data: { categories: ['messages', 'moderation', 'features'] },
+    });
+    const banArgs = {
+      guild_id: '10',
+      user_id: '42',
+      reason: 'Browser test case',
+    };
+    const pendingBan = await client.callTool({
+      name: 'moderation_ban',
+      arguments: banArgs,
+    });
+    const confirmation = JSON.parse(
+      (pendingBan.content as { text: string }[])[0].text,
+    ).result.code;
+    expect(
+      (
+        await client.callTool({
+          name: 'moderation_ban',
+          arguments: { ...banArgs, confirmation },
+        })
+      ).isError,
+    ).toBeFalsy();
+    await page.reload();
+    await expect(page.locator('#case-browser')).toContainText(
+      'Browser test case',
+    );
+    await page.getByLabel('User ID (optional)', { exact: false }).fill('42');
+    await page.getByRole('button', { name: 'Filter', exact: true }).click();
+    await expect(page.locator('#case-browser')).toContainText(
+      'agent:Desktop agent',
+    );
+    await page.getByRole('button', { name: 'Void case', exact: true }).click();
+    await expect(page.locator('#case-browser')).toContainText('Void');
+    await expect(
+      page.getByRole('button', { name: 'Void case', exact: true }),
+    ).toHaveCount(0);
+    await page.goto('/#bots/hello-bot/servers/20/moderation');
+    await expect(page.locator('#case-browser')).toContainText(
+      'No cases in this server.',
+    );
     await page.goto('/#bots/hello-bot/audit');
     const audit = page.getByRole('region', { name: 'Audit entries' });
     await expect(audit).toBeVisible();

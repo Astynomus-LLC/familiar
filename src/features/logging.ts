@@ -253,3 +253,38 @@ export const loggingFeatures: Feature[] = loggingFamilies.map(
     })),
   }),
 );
+
+// Shared moderation hook: automod and human/agent actions use this destination.
+export async function logModeration(
+  ctx: FeatureContext,
+  event: Record<string, unknown>,
+) {
+  if (!ctx.store || !ctx.bot) return;
+  const module = ctx.store.moduleInstance(ctx.bot.id, ctx.guild.id, 'logging');
+  if (
+    !module.enabled ||
+    !ctx.store
+      .featureInstances(ctx.bot.id, ctx.guild.id)
+      .some((i) => i.featureId === 'logging.memberModerated' && i.enabled)
+  )
+    return;
+  const channel = await ctx.guild.channels.fetch(
+    String(module.config.channelId),
+  );
+  if (!channel?.isTextBased() || !('send' in channel))
+    throw new Error('Log channel unavailable');
+  await channel.send({
+    embeds: [
+      {
+        title: `Moderation · ${String(event.action)}`,
+        fields: Object.entries(event)
+          .filter(([key]) =>
+            ['case_number', 'user_id', 'actor', 'reason'].includes(key),
+          )
+          .map(([name, value]) => ({ name, value: clip(value) })),
+        timestamp: new Date().toISOString(),
+      },
+    ],
+    allowedMentions: { parse: [] },
+  });
+}

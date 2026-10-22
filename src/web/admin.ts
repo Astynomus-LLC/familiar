@@ -117,6 +117,54 @@ export function mountAdmin(
       })),
     );
   });
+  app.get('/api/admin/bots/:slug/servers/:guild/cases', async (req, res) => {
+    const bot = store.bots().find((b) => b.slug === req.params.slug);
+    if (!bot) throw new Error('Bot not found.');
+    const user = z
+      .string()
+      .regex(/^\d+$/)
+      .optional()
+      .parse(req.query.user || undefined);
+    const before = z.coerce
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .parse(req.query.before);
+    res.json(
+      await manager.getModlogs(bot, String(req.params.guild), user, before),
+    );
+  });
+  app.post(
+    '/api/admin/bots/:slug/servers/:guild/cases/:number/void',
+    async (req, res) => {
+      const bot = store.bots().find((b) => b.slug === req.params.slug);
+      if (!bot) throw new Error('Bot not found.');
+      const [guild] = await manager.resolveGuilds(
+        bot,
+        String(req.params.guild),
+      );
+      const number = z.coerce
+        .number()
+        .int()
+        .positive()
+        .parse(req.params.number);
+      const entry = store.voidCase(guild.id, number);
+      store.audit({
+        timestamp: new Date().toISOString(),
+        key: auth.person(req)!.id,
+        bot,
+        tool: 'voidcase',
+        target: `${guild.id}:${number}`,
+        result: entry ? 'success' : 'not found',
+      });
+      if (!entry) {
+        res.status(404).json({ error: 'Case not found.' });
+        return;
+      }
+      res.json(entry);
+    },
+  );
   app.get('/api/admin/bots/:slug/servers/:guild/:kind', async (req, res) => {
     const bot = store.bots().find((b) => b.slug === req.params.slug);
     if (!bot) throw new Error('Bot not found.');
