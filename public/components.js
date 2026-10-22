@@ -1,3 +1,4 @@
+import { clientSetup } from './client-setup.js';
 export const escape = (value) =>
   String(value ?? '').replace(
     /[&<>"']/g,
@@ -146,17 +147,41 @@ export function keyForm(state) {
 </form>`;
 }
 
-export function keyResult(generatedKey) {
+export function keyResult(generatedKey, client = 'codex') {
+  const install = clientSetup(generatedKey, client);
   return `<section class="panel">
 <p class="eyebrow">Shown once</p>
 <h2>Your agent’s key is ready</h2>
 <p>Save the key now. Familiar stores only its hash.</p>
 <pre>${escape(generatedKey.secret)}</pre>
 <button class="secondary" data-action="copy-key">Copy key</button>
-<h3>Client configuration</h3>
-<pre>${escape(JSON.stringify(generatedKey.config, null, 2))}</pre>
+<h3>Connect your agent</h3>
+<label for="install-client">Client</label><select id="install-client">
+${[
+  ['codex', 'Codex'],
+  ['claude', 'Claude Code'],
+  ['opencode', 'OpenCode'],
+  ['other', 'Other HTTP client'],
+]
+  .map(
+    ([value, name]) =>
+      `<option value="${value}" ${client === value ? 'selected' : ''}>${name}</option>`,
+  )
+  .join('')}
+</select>
+<p>${escape(install.instructions)}</p>
+<p>The API key is already included. No environment variable or separate login is required. These snippets contain your secret; keep them private and out of source control.</p>
+<pre id="client-config">${escape(install.config)}</pre>
 <div class="row">
-<button data-action="copy-config">Copy client config</button>
+<button data-action="copy-config">Copy ${client === 'claude' ? 'install command' : 'config'}</button>
+</div>
+${install.command ? `<p>${escape(install.commandHelp)}</p><pre>${escape(install.command)}</pre><button class="secondary" data-action="copy-command">Copy launch command</button>` : ''}
+<p>${escape(install.verify)}</p>
+<p>For localhost URLs, run the client on the same machine as Familiar.</p>
+<button class="secondary" data-action="check-connection">Check connection</button>
+<p id="connection-result" role="status">Checks this key and tool discovery from your browser. Your agent must still load its configuration.</p>
+<details><summary>Connection troubleshooting</summary><p>If authentication fails, replace the entire Familiar entry with this configuration. If tools are missing, restart the client process and check for project settings overriding it. If no tools are available, check the key’s bot scope and enabled categories. A status label alone is not a tool test: ask the agent to call list_bots.</p></details>
+<div class="row">
 <button class="secondary" data-action="dismiss-key">I’ve saved it</button>
 </div>
 </section>`;

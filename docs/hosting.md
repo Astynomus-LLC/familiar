@@ -93,6 +93,39 @@ Protect this client config like any other secret. Stdio is intentionally keyless
 and trusted locally. Use HTTP with a scoped API key when you need identity or
 capability restrictions.
 
+## Connect an agent to the running server
+
+Generate a scoped key in **Keys**, then choose **Codex**, **Claude Code**,
+**OpenCode**, or **Other HTTP client** on the result screen. Each option includes
+this instance's URL and the new key in the client's required format. Save it before
+leaving: existing keys cannot be retrieved, because Familiar stores only hashes.
+
+- Codex: merge the TOML into `~/.codex/config.toml` (or
+  `$CODEX_HOME/config.toml`), replacing any old Familiar section. The generated
+  `http_headers` includes authentication directly; do not put a key into
+  `bearer_token_env_var`, which expects a variable name. The optional launch
+  command starts one CLI session with the same settings without editing a file.
+- Claude Code: run the generated user-scope install command in Bash or Zsh.
+  Remove an existing Familiar entry at that scope before adding its replacement.
+  This option is specifically for Claude Code.
+- OpenCode: merge the generated JSON into `~/.config/opencode/opencode.json`.
+  It uses a remote server with an Authorization header and OAuth disabled.
+
+Keep configurations and commands private: they include the API key. Preserve
+unrelated settings when merging, and check for project-level overrides. Localhost
+URLs work only when the client runs on the Familiar host.
+
+Use **Check connection** to verify authentication and tool discovery from the
+browser. This does not inspect the agent's configuration. Fully restart the agent
+and ask it to call `list_bots` to verify its connection. If authentication fails,
+replace the old client entry; if no tools are listed, check the bot scope and
+categories. An unknown client status label alone does not establish a failed tool
+connection.
+
+Client format references: [Codex](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
+[Claude Code](https://code.claude.com/docs/en/mcp), and
+[OpenCode](https://opencode.ai/docs/mcp-servers/).
+
 ## Offline bots and token changes
 
 Invalid tokens are rejected on save. A failed gateway login leaves the bot offline

@@ -1,3 +1,4 @@
+import { clientSetup, checkConnection } from './client-setup.js';
 import {
   escape,
   avatar,
@@ -16,6 +17,7 @@ let session;
 let state;
 let page = location.hash.slice(1) || 'dashboard';
 let generatedKey;
+let installClient = 'codex';
 let noticeTimer;
 
 async function api(path, method = 'GET', body) {
@@ -80,7 +82,7 @@ async function render() {
     return;
   }
   if (generatedKey) {
-    main.innerHTML = keyResult(generatedKey);
+    main.innerHTML = keyResult(generatedKey, installClient);
     return;
   }
   const entries = page === 'audit-log' ? await api('/api/admin/audit') : [];
@@ -184,13 +186,28 @@ async function action(button) {
     await api(`/api/admin/keys/${id}`, 'DELETE', {});
   }
   if (action === 'access') await api('/api/admin/access', 'POST', { id, role });
-  if (action === 'copy-key' || action === 'copy-config') {
+  if (['copy-key', 'copy-config', 'copy-command'].includes(action)) {
     await navigator.clipboard.writeText(
       action === 'copy-key'
         ? generatedKey.secret
-        : JSON.stringify(generatedKey.config, null, 2),
+        : clientSetup(generatedKey, installClient)[
+            action === 'copy-command' ? 'command' : 'config'
+          ],
     );
     notice('Copied.');
+    return;
+  }
+  if (action === 'check-connection') {
+    const result = document.querySelector('#connection-result');
+    result.textContent = 'Checking authentication and tools…';
+    try {
+      const count = await checkConnection(generatedKey);
+      result.textContent = count
+        ? `Connected from this browser. Authentication passed; ${count} tools available. Now restart your agent and ask it to call list_bots.`
+        : 'Authentication passed, but no tools are available. Check this key’s bot scope and the bot’s categories.';
+    } catch (error) {
+      result.textContent = `Connection check failed: ${error.message}`;
+    }
     return;
   }
   if (action === 'dismiss-key') generatedKey = undefined;
@@ -203,6 +220,13 @@ async function action(button) {
   }
   await render();
 }
+
+document.addEventListener('change', (event) => {
+  if (event.target.id !== 'install-client' || !generatedKey) return;
+  installClient = event.target.value;
+  main.innerHTML = keyResult(generatedKey, installClient);
+  document.querySelector('#install-client').focus();
+});
 
 document.addEventListener('submit', async (event) => {
   if (!event.target.matches('form[data-form]')) return;

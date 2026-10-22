@@ -51,6 +51,64 @@ test('setup wizard through scoped key and client configuration', async ({
     'http://localhost:3210/mcp',
   );
   const secret = (await page.locator('pre').first().textContent())!;
+  await expect(page.locator('#client-config')).toContainText(
+    '[mcp_servers.familiar]',
+  );
+  await expect(page.locator('#client-config')).not.toContainText(
+    'bearer_token_env_var',
+  );
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.getByRole('button', { name: 'Copy config', exact: true }).click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
+    `Authorization = "Bearer ${secret}"`,
+  );
+  await page
+    .getByRole('button', { name: 'Check connection', exact: true })
+    .click();
+  await expect(page.locator('#connection-result')).toContainText(
+    'Authentication passed;',
+  );
+  await page.getByLabel('Client', { exact: true }).selectOption('claude');
+  await expect(page.locator('#client-config')).toContainText(
+    'claude mcp add --transport http --scope user',
+  );
+  await page
+    .getByRole('button', { name: 'Copy install command', exact: true })
+    .click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(
+    `Authorization: Bearer ${secret}`,
+  );
+  await page.getByLabel('Client', { exact: true }).selectOption('opencode');
+  const openCode = JSON.parse(
+    (await page.locator('#client-config').textContent())!,
+  );
+  expect(openCode.mcp.familiar).toMatchObject({
+    type: 'remote',
+    oauth: false,
+    headers: { Authorization: `Bearer ${secret}` },
+  });
+  await page.getByLabel('Client', { exact: true }).selectOption('other');
+  expect(
+    JSON.parse((await page.locator('#client-config').textContent())!).mcpServers
+      .familiar.headers.Authorization,
+  ).toBe(`Bearer ${secret}`);
+  await page.route('**/mcp', (route) =>
+    route.fulfill({ status: 401, body: 'Unauthorized' }),
+  );
+  await page
+    .getByRole('button', { name: 'Check connection', exact: true })
+    .click();
+  await expect(page.locator('#connection-result')).toContainText(
+    'API key rejected',
+  );
+  await page.unroute('**/mcp');
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'I’ve saved it' }).click();
   await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
   await expect(
