@@ -272,6 +272,7 @@ test('setup wizard through scoped key and client configuration', async ({
       .locator('..')
       .getByRole('button', { name: 'Save settings' })
       .click();
+    await expect(commands).toBeHidden();
     await page.getByText('Configure Reaction roles', { exact: true }).click();
     const bindings = page.locator('[data-community="bindings"]');
     await expect(bindings.getByLabel('Message ID or link')).toHaveValue('44');
@@ -286,6 +287,7 @@ test('setup wizard through scoped key and client configuration', async ({
       .locator('..')
       .getByRole('button', { name: 'Save settings' })
       .click();
+    await expect(bindings).toBeHidden();
     const configured = await client.callTool({
       name: 'list_reaction_roles',
       arguments: { guild: '10' },

@@ -14,7 +14,7 @@ export function createMcpServer(
   keyId?: string,
 ) {
   const server = new Server(
-    { name: 'Familiar', version: '0.1.0' },
+    { name: 'Familiar', version: '1.0.0' },
     { capabilities: { tools: { listChanged: true } } },
   );
   const session = new Session(
