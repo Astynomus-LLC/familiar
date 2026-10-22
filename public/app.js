@@ -1,4 +1,9 @@
-import { serversView, featureConfig } from './features.js';
+import {
+  serversView,
+  serverView,
+  gatewayForm,
+  featureConfig,
+} from './features.js';
 import { clientSetup, checkConnection } from './client-setup.js';
 import {
   escape,
@@ -88,10 +93,72 @@ async function render() {
     return;
   }
   if (page.startsWith('servers/')) {
-    const bot = state.bots.find((bot) => bot.slug === page.slice(8));
+    location.hash = `bots/${page.slice(8)}/servers`;
+    return;
+  }
+  if (page.startsWith('bots/')) {
+    const [, slug, tab = 'tools', guildId, moduleId] = page.split('/');
+    const bot = state.bots.find((b) => b.slug === slug);
     if (!bot) throw new Error('Bot not found.');
-    serverGuilds = await api(`/api/admin/bots/${bot.slug}/servers`);
-    main.innerHTML = serversView(bot, serverGuilds);
+    if (tab === 'servers') {
+      serverGuilds = await api(`/api/admin/bots/${bot.slug}/servers`);
+      if (guildId) {
+        const guild = serverGuilds.find((g) => g.id === guildId);
+        if (!guild) throw new Error('Server not found.');
+        const resources = { channels: [], roles: [] };
+        if (moduleId) {
+          const results = await Promise.allSettled(
+            ['channels', 'roles'].map((kind) =>
+              api(`/api/admin/bots/${slug}/servers/${guildId}/${kind}`),
+            ),
+          );
+          results.forEach((result, index) => {
+            if (result.status === 'fulfilled')
+              resources[index ? 'roles' : 'channels'] = result.value;
+            else resources.error = result.reason.message;
+          });
+        }
+        main.innerHTML = serverView(
+          bot,
+          serverGuilds,
+          guild,
+          moduleId,
+          resources,
+        );
+        return;
+      }
+    }
+    const tabs = [
+      ['tools', 'MCP Tools'],
+      ['intents', 'Intents'],
+      ['keys', 'API Keys'],
+      ['servers', 'Servers'],
+      ['audit', 'Audit Log'],
+    ];
+    const header = `<p><a href="#bots">← Bots</a></p><header class="row between panel"><div class="row">${avatar(bot)}<h1>${escape(bot.name)}</h1><span class="badge">${escape(bot.state)}</span></div><button class="secondary" data-action="reconnect" data-slug="${escape(bot.slug)}">Reconnect</button></header><nav class="bot-tabs" aria-label="Bot sections">${tabs.map(([id, label]) => `<a href="#bots/${escape(bot.slug)}/${id}" ${id === tab ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+    const content =
+      tab === 'tools'
+        ? botCard(state, bot)
+        : tab === 'intents'
+          ? gatewayForm(state, bot)
+          : tab === 'servers'
+            ? serversView(bot, serverGuilds)
+            : tab === 'keys'
+              ? pageContent(
+                  'keys',
+                  {
+                    ...state,
+                    bots: [bot],
+                    keys: state.keys.filter(
+                      (key) => key.bots === null || key.bots.includes(slug),
+                    ),
+                  },
+                  session,
+                )
+              : tab === 'audit'
+                ? `<h2>Audit log</h2>${auditTable(await api(`/api/admin/audit?bot=${encodeURIComponent(slug)}`))}`
+                : '<p>Section not found.</p>';
+    main.innerHTML = header + content;
     return;
   }
   const entries = page === 'audit-log' ? await api('/api/admin/audit') : [];
@@ -137,19 +204,22 @@ async function submit(form) {
     });
     notice('Gateway settings saved. Bot reconnected.');
   }
-  if (kind === 'feature') {
-    const feature = serverGuilds
-      .find((g) => g.id === form.dataset.guild)
-      .features.find((f) => f.featureId === form.dataset.feature);
-    await api(`/api/admin/bots/${form.dataset.slug}/features`, 'PATCH', {
-      guild: values.scope === 'all' ? 'all' : form.dataset.guild,
-      featureId: feature.featureId,
-      enabled: data.has('enabled'),
-      ...(data.has('enabled') || feature.config
-        ? { config: featureConfig(form, feature.configSchema) }
-        : {}),
-    });
-    notice('Feature saved.');
+  if (kind === 'feature' || kind === 'module') {
+    const guild = serverGuilds.find((g) => g.id === form.dataset.guild);
+    const isModule = kind === 'module';
+    const item = isModule
+      ? guild.modules.find((m) => m.id === form.dataset.id)
+      : guild.features.find((f) => f.featureId === form.dataset.id);
+    await api(
+      `/api/admin/bots/${form.dataset.slug}/${isModule ? 'modules' : 'features'}`,
+      'PATCH',
+      {
+        guild: guild.id,
+        [isModule ? 'moduleId' : 'featureId']: form.dataset.id,
+        config: featureConfig(form, item.fields),
+      },
+    );
+    notice('Settings saved.');
   }
   if (kind === 'key') {
     const bots = values.scope === 'all' ? null : data.getAll('bots');
@@ -195,6 +265,35 @@ async function submit(form) {
 
 async function action(button) {
   const { action, slug, id, role, before } = button.dataset;
+  if (action === 'toggle-module' || action === 'toggle-feature') {
+    const isModule = action === 'toggle-module';
+    const enabled = button.dataset.enabled === 'true';
+    const guild = serverGuilds.find((g) => g.id === button.dataset.guild);
+    const item = isModule
+      ? guild.modules.find((m) => m.id === id)
+      : guild.features.find((f) => f.featureId === id);
+    const form = button.closest('.feature-card')?.querySelector('form');
+    await api(
+      `/api/admin/bots/${slug}/${isModule ? 'modules' : 'features'}`,
+      'PATCH',
+      {
+        guild: guild.id,
+        [isModule ? 'moduleId' : 'featureId']: id,
+        enabled,
+        ...(!isModule && enabled && !item.config && form
+          ? { config: featureConfig(form, item.fields) }
+          : {}),
+      },
+    );
+  }
+  if (action === 'reconnect') {
+    const bot = state.bots.find((b) => b.slug === slug);
+    await api(`/api/admin/bots/${slug}/gateway`, 'PATCH', {
+      intents: bot.intents,
+      messageCacheSize: bot.messageCacheSize,
+    });
+    notice('Bot reconnected.');
+  }
   if (action === 'logout') {
     await api('/api/logout', 'POST', {});
     generatedKey = undefined;
@@ -252,6 +351,8 @@ async function action(button) {
 }
 
 document.addEventListener('change', (event) => {
+  if (['server-switcher', 'module-picker'].includes(event.target.id))
+    location.hash = event.target.value;
   if (event.target.id !== 'install-client' || !generatedKey) return;
   installClient = event.target.value;
   main.innerHTML = keyResult(generatedKey, installClient);
@@ -288,3 +389,41 @@ window.addEventListener('hashchange', () => {
   render().catch((error) => notice(error.message));
 });
 render().catch((error) => notice(error.message));
+
+// Refresh the overview when another owner or an MCP agent changes stored state.
+// Configuration forms are left intact while the owner is editing them.
+let refreshingOverview = false;
+window.setInterval(async () => {
+  const parts = page.split('/');
+  if (
+    refreshingOverview ||
+    document.hidden ||
+    parts[0] !== 'bots' ||
+    parts[2] !== 'servers' ||
+    parts.length !== 4 ||
+    document.activeElement?.closest('button, select')
+  )
+    return;
+  refreshingOverview = true;
+  const route = page;
+  try {
+    const guilds = await api(`/api/admin/bots/${parts[1]}/servers`);
+    if (page !== route) return;
+    const guild = guilds.find((g) => g.id === parts[3]);
+    const previous = serverGuilds.find((g) => g.id === parts[3]);
+    if (guild && JSON.stringify(guild) !== JSON.stringify(previous)) {
+      serverGuilds = guilds;
+      main.innerHTML = serverView(
+        state.bots.find((b) => b.slug === parts[1]),
+        guilds,
+        guild,
+        undefined,
+        {},
+      );
+    }
+  } catch {
+    /* A transient offline bot should not replace the current view. */
+  } finally {
+    refreshingOverview = false;
+  }
+}, 5000);

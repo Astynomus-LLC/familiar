@@ -1,4 +1,3 @@
-import { gatewayForm } from './features.js';
 import {
   escape,
   date,
@@ -6,7 +5,7 @@ import {
   check,
   auditTable,
   botForm,
-  botCard,
+  botTile,
   keyForm,
 } from './components.js';
 
@@ -45,7 +44,7 @@ export function pageContent(page, state, session, entries = [], people = []) {
 <h2>Recent activity</h2>${auditTable(state.audit)}</section>`;
   else if (page === 'bots')
     return `<h1>Bots</h1>
-<p class="muted">A separate identity and set of capabilities for each bot.</p>${state.bots.map((bot) => botCard(state, bot) + gatewayForm(state, bot)).join('')}${botForm()}`;
+<p class="muted">A separate identity and set of capabilities for each bot.</p><div class="grid">${state.bots.map(botTile).join('')}</div>${botForm()}`;
   else if (page === 'keys')
     return `<h1>API keys</h1>
 <p class="muted">Give each agent only the bots and capabilities it needs.</p>

@@ -130,13 +130,34 @@ submissions. [Built by Astynomus](https://astynomus.com) — see our other produ
 
 ## Autonomous server features
 
-Logging, autorole, and welcome run without an agent connection. In **Bots →
-Servers and features**, enable and configure each feature for each server. New
-servers have no enabled features. Saving to **all servers** writes the validated
-configuration to each current server; it does not create inheritance or affect
-servers joined later. First-time MCP enable calls take the required `config`;
-subsequent `configure_feature` calls patch the stored configuration. The `features`
-tool category is independently toggleable, and all its mutations are audited.
+Logging, autorole, and welcome run without an agent connection. Open **Bots →
+a bot → Servers → a server** to see its module overview. The server stays selected
+while you navigate modules. Each module’s master switch suspends its features
+without changing their individual switches or settings. Modules default to on;
+new servers have no enabled features. The Logging module shares a log channel,
+bot filtering, ignored channels, and content settings across seven event features.
+Members contains autorole and welcome. Channel and role pickers load from the bot’s
+live Discord connection; reconnect an offline bot to refresh choices.
+
+Bot pages keep MCP Tools, Intents, API Keys, Servers, and Audit Log in top tabs.
+URLs preserve the selected bot, server, and module. The overview refreshes when
+another owner or MCP agent changes configuration.
+
+`list_features` returns modules, shared config, individual feature state, effective
+state, and missing intents. `configure_module` patches shared settings and
+`set_module_enabled` suspends or restores a module. `configure_feature` patches
+individual settings; `set_feature_enabled` changes an individual switch. For
+example, configure module `logging` with `channelId`, then enable feature
+`logging.messageDeleted`. All feature tools accept a guild ID, an unambiguous name,
+or `all` for the current servers. Bulk changes are validated before being saved;
+they do not affect servers joined later. The `features` tool category is
+independently toggleable, and all its mutations are audited.
+
+On startup, a versioned SQLite transaction migrates v1.1 logging into shared module
+config and seven individual features. The old logging enabled state becomes the
+master switch; family selections become individual switches. Unknown saved config
+is retained. Autorole and welcome retain their settings under Members. Reopening
+the database does not repeat the migration.
 
 Bot intent checkboxes control the exact gateway intent set. Saving reconnects the
 bot. Enable privileged intents in the Discord developer portal first. Instances

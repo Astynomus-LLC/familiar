@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { FeatureEngine } from '../features/engine.js';
-import { features } from '../features/registry.js';
-import { gatewaySettings, type GatewaySettings } from '../features/types.js';
+import { features, modules } from '../features/registry.js';
+import {
+  gatewaySettings,
+  type ConfigField,
+  type GatewaySettings,
+} from '../features/types.js';
 import {
   joinVoiceChannel,
   getVoiceConnection,
@@ -164,6 +168,24 @@ export const discordConnection: ConnectionFactory = (
     },
   };
 };
+
+function parseConfig(
+  schema: z.ZodObject,
+  fields: Record<string, ConfigField>,
+  config: Record<string, unknown>,
+) {
+  const result = schema.safeParse(config);
+  if (!result.success)
+    throw new Error(
+      result.error.issues
+        .map(
+          (issue) =>
+            `${fields[String(issue.path[0])]?.label ?? 'Settings'}: ${issue.message}`,
+        )
+        .join('; '),
+    );
+  return result.data;
+}
 
 export class BotManager {
   private readonly connections = new Map<string, DiscordConnection>();
@@ -333,8 +355,10 @@ export class BotManager {
     await this.login(bot.slug, connection);
   }
 
-  async guilds(bot: Bot): Promise<{ id: string; name: string }[]> {
-    const result: { id: string; name: string }[] = [];
+  async guilds(
+    bot: Bot,
+  ): Promise<{ id: string; name: string; icon?: string | null }[]> {
+    const result: { id: string; name: string; icon?: string | null }[] = [];
     let after = '';
     for (;;) {
       const page = (await this.request(
@@ -367,10 +391,23 @@ export class BotManager {
     const instances = this.store.featureInstances(bot.id, guildId);
     return features.map((feature) => {
       const instance = instances.find((i) => i.featureId === feature.id);
-      const missingIntents = feature.requiredIntents.filter(
+      const shared = this.store.moduleInstance(bot.id, guildId, feature.module);
+      const requiredIntents = [...feature.requiredIntents];
+      if (
+        feature.id.startsWith('logging.message') &&
+        shared.config.includeContent !== false
+      )
+        requiredIntents.push('MessageContent');
+      const missingIntents = requiredIntents.filter(
         (i) => !gatewaySettings.parse(bot).intents.includes(i),
       );
+      const module = this.store.moduleInstance(bot.id, guildId, feature.module);
       return {
+        module: feature.module,
+        label: feature.label,
+        fields: feature.fields,
+        effectiveEnabled: module.enabled && (instance?.enabled ?? false),
+        moduleEnabled: module.enabled,
         botId: bot.id,
         guildId,
         featureId: feature.id,
@@ -382,11 +419,77 @@ export class BotManager {
         missingIntents,
         state: !instance?.enabled
           ? 'disabled'
-          : missingIntents.length
-            ? 'degraded'
-            : 'enabled',
+          : !module.enabled
+            ? 'suspended'
+            : missingIntents.length
+              ? 'degraded'
+              : 'enabled',
       };
     });
+  }
+
+  moduleStates(bot: Bot, guildId: string) {
+    const states = this.featureStates(bot, guildId);
+    return modules.map((module) => ({
+      ...this.store.moduleInstance(bot.id, guildId, module.id),
+      id: module.id,
+      label: module.label,
+      description: module.description,
+      fields: module.fields,
+      configSchema: z.toJSONSchema(module.configSchema),
+      features: states.filter((f) => f.module === module.id),
+    }));
+  }
+
+  async configureModule(
+    bot: Bot,
+    address: string,
+    moduleId: string,
+    patch?: Record<string, unknown>,
+    enabled?: boolean,
+  ) {
+    const module = modules.find((m) => m.id === moduleId);
+    if (!module) throw new Error('Unknown module.');
+    const guilds = await this.resolveGuilds(bot, address);
+    const instances = guilds.map((guild) => {
+      const old = this.store.moduleInstance(bot.id, guild.id, moduleId);
+      const merged = { ...old.config, ...patch };
+      const config = patch
+        ? {
+            ...merged,
+            ...parseConfig(module.configSchema, module.fields, merged),
+          }
+        : old.config;
+      return { ...old, config, enabled: enabled ?? old.enabled };
+    });
+    this.store.saveModuleInstances(instances);
+    return instances;
+  }
+
+  private readonly resourceCache = new Map<
+    string,
+    { expires: number; value: unknown }
+  >();
+  async guildResources(bot: Bot, guildId: string, kind: 'channels' | 'roles') {
+    const client = this.connections.get(bot.slug)?.client;
+    if (!client?.isReady())
+      throw new Error('Connect the bot to load server choices.');
+    const key = `${bot.id}:${guildId}:${kind}`;
+    const cached = this.resourceCache.get(key);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    const guild = await client.guilds.fetch(guildId);
+    const value =
+      kind === 'channels'
+        ? [...(await guild.channels.fetch()).values()]
+            .filter((c) => c !== null)
+            .map((c) => ({ id: c.id, name: c.name, type: c.type }))
+        : [...(await guild.roles.fetch()).values()].map((r) => ({
+            id: r.id,
+            name: r.name,
+            color: r.hexColor,
+          }));
+    this.resourceCache.set(key, { expires: Date.now() + 15000, value });
+    return value;
   }
 
   async configureFeature(
@@ -400,13 +503,29 @@ export class BotManager {
     if (!feature) throw new Error('Unknown feature.');
     const guilds = await this.resolveGuilds(bot, address);
     const instances = guilds.flatMap((guild) => {
+      if (enabled === true) {
+        const module = modules.find((m) => m.id === feature.module)!;
+        parseConfig(
+          module.configSchema,
+          module.fields,
+          this.store.moduleInstance(bot.id, guild.id, module.id).config,
+        );
+      }
       const old = this.store
         .featureInstances(bot.id, guild.id)
         .find((i) => i.featureId === featureId);
       if (!old && enabled === false) return [];
-      if (!old && enabled !== true)
-        throw new Error('Enable this feature with its required config first.');
-      const config = feature.configSchema.parse({ ...old?.config, ...patch });
+      const config =
+        enabled === false && !patch
+          ? (old?.config ?? {})
+          : {
+              ...old?.config,
+              ...patch,
+              ...parseConfig(feature.configSchema, feature.fields, {
+                ...old?.config,
+                ...patch,
+              }),
+            };
       return [
         {
           botId: bot.id,

@@ -312,32 +312,37 @@ test('feature admin endpoints share MCP config and expose degraded instances', a
     await f.manager.save('hello', 'hello-token', ['features']);
     const { Session } = await import('../src/mcp/session.js');
     const session = new Session(f.store, f.manager);
+    await session.call('configure_module', {
+      guild: '10',
+      module_id: 'logging',
+      config: { channelId: '99' },
+    });
     const enabled = await session.call('set_feature_enabled', {
       guild: '10',
-      feature_id: 'logging',
+      feature_id: 'logging.messageEdited',
       enabled: true,
       config: { channelId: '99' },
     });
     assert.equal(enabled.isError, undefined);
-    await session.call('configure_feature', {
+    await session.call('configure_module', {
       guild: '10',
-      feature_id: 'logging',
+      module_id: 'logging',
       config: { channelId: '98' },
     });
     const guilds = await (
       await browser('/api/admin/bots/hello/servers')
     ).json();
-    assert.equal(guilds[0].features[0].config.channelId, '98');
+    assert.equal(guilds[0].modules[0].config.channelId, '98');
     assert.equal(guilds[0].features[0].state, 'degraded');
     const state = await (await browser('/api/admin/state')).json();
     assert.ok(
-      state.bots[0].degraded[0].missingIntents.includes('GuildMembers'),
+      state.bots[0].degraded[0].missingIntents.includes('GuildMessages'),
     );
     assert.equal(
       (
         await browser('/api/admin/bots/hello/features', 'PATCH', {
           guild: '10',
-          featureId: 'logging',
+          featureId: 'logging.messageEdited',
           enabled: false,
         })
       ).status,
@@ -345,7 +350,8 @@ test('feature admin endpoints share MCP config and expose degraded instances', a
     );
     const status = await session.call('list_features', { guild: '10' });
     assert.equal(
-      JSON.parse(status.content[0].text).result[0].features[0].enabled,
+      JSON.parse(status.content[0].text).result[0].modules[0].features[0]
+        .enabled,
       false,
     );
     session.close();

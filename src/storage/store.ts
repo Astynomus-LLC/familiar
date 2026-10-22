@@ -1,4 +1,9 @@
-import type { FeatureInstance, GatewaySettings } from '../features/types.js';
+import type {
+  FeatureInstance,
+  ModuleInstance,
+  GatewaySettings,
+} from '../features/types.js';
+import { loggingFamilies } from '../features/logging.js';
 import { DatabaseSync } from 'node:sqlite';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -56,8 +61,104 @@ export class Store extends EventEmitter {
       CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS feature_instances (botId TEXT NOT NULL, guildId TEXT NOT NULL, featureId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(botId, guildId, featureId));
+      CREATE TABLE IF NOT EXISTS module_instances (botId TEXT NOT NULL, guildId TEXT NOT NULL, moduleId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(botId, guildId, moduleId));
       CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
     `);
+    this.migrateModules();
+  }
+
+  private migrateModules(): void {
+    if ((this.setting<number>('featureSchemaVersion') ?? 1) >= 2) return;
+    this.db.exec('BEGIN');
+    try {
+      const rows = this.db.prepare('SELECT value FROM feature_instances').all();
+      for (const row of rows) {
+        const old = JSON.parse(String(row.value)) as FeatureInstance;
+        if (old.featureId !== 'logging') continue;
+        const { families, ...config } = old.config;
+        // Keep unrecognized values verbatim, including future family names.
+        if (families !== undefined) config.families = families;
+        this.writeModule({
+          botId: old.botId,
+          guildId: old.guildId,
+          moduleId: 'logging',
+          enabled: old.enabled,
+          config,
+        });
+        const statement = this.db.prepare(
+          'INSERT OR IGNORE INTO feature_instances VALUES (?, ?, ?, ?)',
+        );
+        for (const family of loggingFamilies) {
+          const instance: FeatureInstance = {
+            botId: old.botId,
+            guildId: old.guildId,
+            featureId: `logging.${family}`,
+            enabled: Array.isArray(families)
+              ? families.includes(family)
+              : families && typeof families === 'object'
+                ? Boolean((families as Record<string, unknown>)[family])
+                : true,
+            config: {},
+          };
+          statement.run(
+            instance.botId,
+            instance.guildId,
+            instance.featureId,
+            JSON.stringify(instance),
+          );
+        }
+        this.db
+          .prepare(
+            'DELETE FROM feature_instances WHERE botId = ? AND guildId = ? AND featureId = ?',
+          )
+          .run(old.botId, old.guildId, 'logging');
+      }
+      this.setSetting('featureSchemaVersion', 2);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  moduleInstance(
+    botId: string,
+    guildId: string,
+    moduleId: string,
+  ): ModuleInstance {
+    const row = this.db
+      .prepare(
+        'SELECT value FROM module_instances WHERE botId = ? AND guildId = ? AND moduleId = ?',
+      )
+      .get(botId, guildId, moduleId);
+    return row
+      ? JSON.parse(String(row.value))
+      : { botId, guildId, moduleId, enabled: true, config: {} };
+  }
+
+  private writeModule(instance: ModuleInstance): void {
+    this.db
+      .prepare(
+        'INSERT INTO module_instances VALUES (?, ?, ?, ?) ON CONFLICT(botId, guildId, moduleId) DO UPDATE SET value = excluded.value',
+      )
+      .run(
+        instance.botId,
+        instance.guildId,
+        instance.moduleId,
+        JSON.stringify(instance),
+      );
+  }
+
+  saveModuleInstances(instances: ModuleInstance[]): void {
+    this.db.exec('BEGIN');
+    try {
+      for (const instance of instances) this.writeModule(instance);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    for (const instance of instances) this.emit('featuresChanged', instance);
   }
 
   private rows<T>(table: 'bots' | 'keys' | 'people'): T[] {
@@ -100,6 +201,10 @@ export class Store extends EventEmitter {
     this.db.exec('BEGIN');
     try {
       const bot = this.bots().find((bot) => bot.slug === slug);
+      if (bot)
+        this.db
+          .prepare('DELETE FROM module_instances WHERE botId = ?')
+          .run(bot.id);
       if (bot)
         this.db
           .prepare('DELETE FROM feature_instances WHERE botId = ?')
@@ -224,12 +329,13 @@ export class Store extends EventEmitter {
   auditEntries(
     limit = 100,
     before = Number.MAX_SAFE_INTEGER,
+    bot?: string,
   ): (AuditEntry & { id: number })[] {
     return this.db
       .prepare(
-        'SELECT id, value FROM audit WHERE id < ? ORDER BY id DESC LIMIT ?',
+        "SELECT id, value FROM audit WHERE id < ? AND (? IS NULL OR json_extract(value, '$.bot.slug') = ?) ORDER BY id DESC LIMIT ?",
       )
-      .all(before, limit)
+      .all(before, bot ?? null, bot ?? null, limit)
       .map((row) => ({
         ...JSON.parse(row.value as string),
         id: Number(row.id),

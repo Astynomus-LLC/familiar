@@ -12,7 +12,7 @@ export const date = (value) =>
 export const avatar = (user) =>
   user.avatar
     ? `<img class="avatar" alt="" src="https://cdn.discordapp.com/avatars/${escape(user.id)}/${escape(user.avatar)}.png?size=64">`
-    : '';
+    : `<span class="avatar initials" aria-hidden="true">${escape(user.name?.slice(0, 2).toUpperCase())}</span>`;
 export const check = (name, value, checked, label) =>
   `<label>
 <input type="checkbox" name="${name}" value="${escape(value)}" ${checked ? 'checked' : ''}>${escape(label)}</label>`;
@@ -185,4 +185,8 @@ ${install.command ? `<p>${escape(install.commandHelp)}</p><pre>${escape(install.
 <button class="secondary" data-action="dismiss-key">I’ve saved it</button>
 </div>
 </section>`;
+}
+
+export function botTile(bot) {
+  return `<a class="panel card-link" href="#bots/${escape(bot.slug)}">${avatar(bot)}<h2>${escape(bot.name)}</h2><span class="badge ${bot.state === 'online' ? '' : 'offline'}">${escape(bot.state)}</span><p class="muted">${bot.guilds} servers</p></a>`;
 }

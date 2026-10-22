@@ -102,8 +102,52 @@ export function mountAdmin(
       (await manager.guilds(bot)).map((guild) => ({
         ...guild,
         features: manager.featureStates(bot, guild.id),
+        modules: manager.moduleStates(bot, guild.id),
       })),
     );
+  });
+  app.get('/api/admin/bots/:slug/servers/:guild/:kind', async (req, res) => {
+    const bot = store.bots().find((b) => b.slug === req.params.slug);
+    if (!bot) throw new Error('Bot not found.');
+    const kind = z.enum(['channels', 'roles']).parse(req.params.kind);
+    res.json(await manager.guildResources(bot, String(req.params.guild), kind));
+  });
+  app.patch('/api/admin/bots/:slug/modules', async (req, res) => {
+    const bot = store.bots().find((b) => b.slug === req.params.slug);
+    if (!bot) throw new Error('Bot not found.');
+    const input = z
+      .object({
+        guild: z.string(),
+        moduleId: z.string(),
+        config: z.record(z.string(), z.unknown()).optional(),
+        enabled: z.boolean().optional(),
+      })
+      .parse(req.body);
+    let result = 'failed';
+    try {
+      res.json(
+        await manager.configureModule(
+          bot,
+          input.guild,
+          input.moduleId,
+          input.config,
+          input.enabled,
+        ),
+      );
+      result = 'success';
+    } finally {
+      store.audit({
+        timestamp: new Date().toISOString(),
+        key: auth.person(req)!.id,
+        bot: { slug: bot.slug, name: bot.name },
+        tool:
+          input.enabled === undefined
+            ? 'configure_module'
+            : 'set_module_enabled',
+        target: `${input.guild}:${input.moduleId}`,
+        result,
+      });
+    }
   });
   app.patch('/api/admin/bots/:slug/gateway', async (req, res) => {
     const bot = store.bots().find((bot) => bot.slug === req.params.slug);
@@ -248,7 +292,13 @@ export function mountAdmin(
       .positive()
       .optional()
       .parse(req.query.before);
-    res.json(store.auditEntries(100, before));
+    res.json(
+      store.auditEntries(
+        100,
+        before,
+        z.string().optional().parse(req.query.bot),
+      ),
+    );
   });
 
   app.get('/api/admin/access', auth.requireOwner, (_req, res) =>

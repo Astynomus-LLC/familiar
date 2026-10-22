@@ -25,6 +25,7 @@ export interface FeatureInstance {
   config: Record<string, unknown>;
 }
 export interface FeatureContext {
+  enabledFeatures: string[];
   client: Client;
   guild: Guild;
   config: Record<string, unknown>;
@@ -32,7 +33,39 @@ export interface FeatureContext {
   logger: (message: string) => void;
   active: () => boolean;
 }
+export interface ConfigField {
+  type:
+    | 'toggle'
+    | 'text'
+    | 'textarea'
+    | 'number'
+    | 'select'
+    | 'channel'
+    | 'channels'
+    | 'role'
+    | 'roles';
+  label: string;
+  help: string;
+  options?: { value: string; label: string }[];
+}
+export interface Module {
+  id: string;
+  label: string;
+  description: string;
+  configSchema: z.ZodObject;
+  fields: Record<string, ConfigField>;
+}
+export interface ModuleInstance {
+  botId: string;
+  guildId: string;
+  moduleId: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+}
 export interface Feature {
+  module: string;
+  label: string;
+  fields: Record<string, ConfigField>;
   id: string;
   name: string;
   description: string;

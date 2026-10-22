@@ -3,6 +3,30 @@ import type { Feature } from './types.js';
 import { snowflake } from './types.js';
 export const welcome: Feature = {
   id: 'welcome',
+  module: 'members',
+  label: 'Welcome',
+  fields: {
+    channelId: {
+      type: 'channel',
+      label: 'Welcome channel',
+      help: 'Where to greet new members.',
+    },
+    template: {
+      type: 'textarea',
+      label: 'Welcome message',
+      help: 'Use {user}, {server}, and {memberCount} in your message.',
+    },
+    dmEnabled: {
+      type: 'toggle',
+      label: 'Send a direct message',
+      help: 'Also welcome members privately.',
+    },
+    dmTemplate: {
+      type: 'textarea',
+      label: 'Direct message',
+      help: 'Use the same placeholders as the welcome message.',
+    },
+  },
   name: 'Welcome',
   description: 'Welcome new members with a template.',
   configSchema: z.object({

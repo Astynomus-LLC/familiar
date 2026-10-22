@@ -3,6 +3,25 @@ import type { Feature } from './types.js';
 import { snowflake } from './types.js';
 export const autorole: Feature = {
   id: 'autorole',
+  module: 'members',
+  label: 'Autorole',
+  fields: {
+    roleIds: {
+      type: 'roles',
+      label: 'Assigned roles',
+      help: 'Roles to give new members. Place the bot’s role above these roles.',
+    },
+    skipBots: {
+      type: 'toggle',
+      label: 'Skip bots',
+      help: 'Only assign roles to people.',
+    },
+    delaySeconds: {
+      type: 'number',
+      label: 'Delay in seconds',
+      help: 'Wait up to five minutes before assigning roles.',
+    },
+  },
   name: 'Autorole',
   description: 'Assign roles when a member joins.',
   configSchema: z.object({

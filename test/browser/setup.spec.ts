@@ -122,6 +122,10 @@ test('setup wizard through scoped key and client configuration', async ({
   await expect(
     page.getByRole('heading', { name: 'hello', exact: true }),
   ).toBeVisible();
+  await page
+    .getByRole('link')
+    .filter({ has: page.getByRole('heading', { name: 'hello', exact: true }) })
+    .click();
   await expect(page.getByLabel('moderation', { exact: true })).toBeChecked();
   const client = new Client({ name: 'browser-agent', version: '1' });
   const transport = new StreamableHTTPClientTransport(
@@ -156,47 +160,153 @@ test('setup wizard through scoped key and client configuration', async ({
         ),
       )
       .toBe(true);
+    await client.callTool({
+      name: 'configure_module',
+      arguments: {
+        guild: '10',
+        module_id: 'logging',
+        config: { channelId: '98' },
+      },
+    });
     const enabled = await client.callTool({
       name: 'set_feature_enabled',
       arguments: {
         guild: '10',
-        feature_id: 'logging',
+        feature_id: 'logging.messageEdited',
         enabled: true,
-        config: { channelId: '99' },
       },
     });
     expect(enabled.isError).toBeFalsy();
-    await client.callTool({
-      name: 'configure_feature',
-      arguments: {
-        guild: '10',
-        feature_id: 'logging',
-        config: { channelId: '98' },
-      },
+    await page.getByRole('link', { name: 'Servers', exact: true }).click();
+    await page
+      .getByRole('link')
+      .filter({ has: page.getByRole('heading', { name: 'Server A' }) })
+      .click();
+    await expect(page.locator('.server-header')).toContainText('Server A');
+    const loggingCard = page.locator('.module-card').filter({
+      has: page.getByRole('heading', { name: 'Logging', exact: true }),
     });
-    await page.getByRole('link', { name: 'Servers and features →' }).click();
-    await page.getByText('Server A (10)', { exact: true }).click();
-    const logging = page.locator(
-      'form[data-guild="10"][data-feature="logging"]',
-    );
-    await expect(logging.getByLabel('channelId', { exact: true })).toHaveValue(
+    await expect(loggingCard).toContainText('1 of 7 features on');
+    await expect(loggingCard).toContainText('Degraded');
+    await client.callTool({
+      name: 'set_module_enabled',
+      arguments: { guild: '10', module_id: 'logging', enabled: false },
+    });
+    await expect(
+      page.getByRole('switch', { name: 'Logging enabled', exact: true }),
+    ).not.toBeChecked({ timeout: 8000 });
+    await page
+      .getByRole('switch', { name: 'Logging enabled', exact: true })
+      .click();
+    await expect(
+      page.getByRole('switch', { name: 'Logging enabled', exact: true }),
+    ).toBeChecked();
+
+    await page.getByRole('link', { name: 'Configure Logging →' }).click();
+    await expect(page.getByLabel('Log channel', { exact: false })).toHaveValue(
       '98',
     );
-    await expect(page.locator('details').first()).toContainText(
-      'needs GuildMembers',
+    await page.getByLabel('Log channel', { exact: false }).selectOption('99');
+    await page
+      .locator('form[data-form="module"]')
+      .getByRole('button', { name: 'Save settings' })
+      .click();
+    await expect(page.getByLabel('Log channel', { exact: false })).toHaveValue(
+      '99',
     );
-    await logging.getByLabel('Enabled', { exact: true }).uncheck();
-    await logging.getByRole('button', { name: 'Save feature' }).click();
-    await expect
-      .poll(async () => {
-        const result = await client.callTool({
-          name: 'get_feature_config',
-          arguments: { guild: '10', feature_id: 'logging' },
-        });
-        return JSON.parse((result.content as { text: string }[])[0].text).result
-          .enabled;
-      })
-      .toBe(false);
+    await page
+      .getByRole('switch', { name: 'Message deletes enabled', exact: true })
+      .click();
+    await expect(
+      page.getByRole('switch', {
+        name: 'Message deletes enabled',
+        exact: true,
+      }),
+    ).toBeChecked();
+    await page
+      .getByRole('navigation', { name: 'Modules' })
+      .getByRole('link', { name: 'Overview' })
+      .click();
+    await expect(loggingCard).toContainText('2 of 7 features on');
+    await page
+      .getByRole('switch', { name: 'Logging enabled', exact: true })
+      .click();
+    await expect(
+      page.getByRole('switch', { name: 'Logging enabled', exact: true }),
+    ).not.toBeChecked();
+    await page.reload();
+    await expect(
+      page.getByRole('switch', { name: 'Logging enabled', exact: true }),
+    ).not.toBeChecked();
+    await expect(loggingCard).toContainText('2 of 7 features on');
+    await page.getByRole('link', { name: 'Configure Logging →' }).click();
+    await expect(page.locator('.feature-card').first()).toContainText(
+      'Suspended · module is off',
+    );
+    await expect(
+      page.getByRole('switch', { name: 'Message edits enabled', exact: true }),
+    ).toBeChecked();
+    const result = await client.callTool({
+      name: 'list_features',
+      arguments: { guild: '10' },
+    });
+    const module = JSON.parse((result.content as { text: string }[])[0].text)
+      .result[0].modules[0];
+    expect(module.enabled).toBe(false);
+    expect(module.features[0]).toMatchObject({
+      enabled: true,
+      effectiveEnabled: false,
+    });
+    await page
+      .getByRole('switch', { name: 'Logging enabled', exact: true })
+      .click();
+    await expect(
+      page.getByRole('switch', { name: 'Logging enabled', exact: true }),
+    ).toBeChecked();
+    await page
+      .getByRole('navigation', { name: 'Modules' })
+      .getByRole('link', { name: 'Members', exact: true })
+      .click();
+    await page.getByText('Configure Autorole', { exact: true }).click();
+    await page
+      .getByLabel('Assigned roles', { exact: false })
+      .selectOption('88');
+    await page
+      .getByRole('switch', { name: 'Autorole enabled', exact: true })
+      .click();
+    await expect(
+      page.getByRole('switch', { name: 'Autorole enabled', exact: true }),
+    ).toBeChecked();
+    await page.reload();
+    await expect(
+      page.getByLabel('Assigned roles', { exact: false }),
+    ).toHaveValues(['88']);
+    await page
+      .getByRole('combobox', { name: 'Server', exact: true })
+      .selectOption('#bots/hello-bot/servers/20/members');
+    await expect(page.locator('.server-header')).toContainText('Server B');
+    await expect(
+      page.getByRole('switch', { name: 'Autorole enabled', exact: true }),
+    ).not.toBeChecked();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(
+      page.getByRole('combobox', { name: 'Module', exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('navigation', { name: 'Modules' }),
+    ).not.toBeVisible();
+    await page
+      .getByRole('combobox', { name: 'Module', exact: true })
+      .selectOption('#bots/hello-bot/servers/20/logging');
+    await expect(
+      page.getByRole('heading', { name: 'Logging', exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 720 });
     const added = await page.request.post('/api/admin/bots', {
       headers: { Origin: 'http://localhost:3210' },
       data: { slug: 'other', token: 'other-token', categories: ['messages'] },

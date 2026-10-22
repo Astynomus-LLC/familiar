@@ -104,17 +104,20 @@ async function setup(
   };
 }
 
+async function enableLogging(
+  f: Awaited<ReturnType<typeof setup>>,
+  guild: string,
+) {
+  await f.manager.configureModule(f.bot, guild, 'logging', { channelId: '99' });
+  for (const feature of features.filter((f) => f.module === 'logging'))
+    await f.manager.configureFeature(f.bot, guild, feature.id, {}, true);
+}
+
 test('two guild isolation, uncached honesty, loop protection, and live disable', async () => {
   const f = await setup();
   try {
     assert.equal(f.store.featureInstances('1').length, 0);
-    await f.manager.configureFeature(
-      f.bot,
-      '10',
-      'logging',
-      { channelId: '99' },
-      true,
-    );
+    await enableLogging(f, '10');
     await f.manager.configureFeature(
       f.bot,
       '20',
@@ -140,7 +143,7 @@ test('two guild isolation, uncached honesty, loop protection, and live disable',
       author: undefined,
     });
     assert.match(JSON.stringify(f.sent.at(-1)), /unavailable/);
-    await f.manager.configureFeature(f.bot, '10', 'logging', undefined, false);
+    await f.manager.configureModule(f.bot, '10', 'logging', undefined, false);
     const count = f.sent.length;
     await f.engine.dispatch('messageDelete', f.message(0));
     assert.equal(f.sent.length, count);
@@ -157,18 +160,14 @@ test('missing member intent degrades status and skips only member events', async
     'MessageContent',
   ]);
   try {
-    await f.manager.configureFeature(
-      f.bot,
-      '10',
-      'logging',
-      { channelId: '99' },
-      true,
-    );
+    await enableLogging(f, '10');
     await f.engine.dispatch('guildMemberAdd', f.member(0));
     assert.equal(f.sent.length, 0);
     await f.engine.dispatch('messageDelete', f.message(0));
     assert.equal(f.sent.length, 1);
-    const status = f.manager.featureStates(f.bot, '10')[0];
+    const status = f.manager
+      .featureStates(f.bot, '10')
+      .find((f) => f.featureId === 'logging.memberJoined')!;
     assert.equal(status.state, 'degraded');
     assert.deepEqual(status.missingIntents, ['GuildMembers']);
     const session = new Session(f.store, f.manager);
@@ -207,36 +206,21 @@ test('MCP and UI backing state parity, audit, all scope, ambiguity and validatio
   const f = await setup();
   const session = new Session(f.store, f.manager);
   try {
-    await f.manager.configureFeature(
-      f.bot,
-      'all',
-      'logging',
-      { channelId: '99' },
-      true,
-    );
-    const response = await session.call('configure_feature', {
+    await enableLogging(f, 'all');
+    const response = await session.call('configure_module', {
       guild: '10',
-      feature_id: 'logging',
+      module_id: 'logging',
       config: { channelId: '98' },
     });
     assert.equal(response.isError, undefined);
-    assert.equal(
-      f.manager.featureStates(f.bot, '10')[0].config?.channelId,
-      '98',
-    );
-    assert.equal(
-      f.manager.featureStates(f.bot, '20')[0].config?.channelId,
-      '99',
-    );
-    assert.equal(f.store.auditEntries()[0].tool, 'configure_feature');
+    assert.equal(f.manager.moduleStates(f.bot, '10')[0].config.channelId, '98');
+    assert.equal(f.manager.moduleStates(f.bot, '20')[0].config.channelId, '99');
+    assert.equal(f.store.auditEntries()[0].tool, 'configure_module');
     await assert.rejects(f.manager.resolveGuilds(f.bot, 'Server'), /10.*20/);
     await assert.rejects(
-      f.manager.configureFeature(f.bot, 'all', 'logging', { channelId: 'bad' }),
+      f.manager.configureModule(f.bot, 'all', 'logging', { channelId: 'bad' }),
     );
-    assert.equal(
-      f.manager.featureStates(f.bot, '10')[0].config?.channelId,
-      '98',
-    );
+    assert.equal(f.manager.moduleStates(f.bot, '10')[0].config.channelId, '98');
   } finally {
     session.close();
     f.close();
@@ -246,13 +230,7 @@ test('MCP and UI backing state parity, audit, all scope, ambiguity and validatio
 test('a throwing handler leaves other features and connection functional', async () => {
   const f = await setup();
   try {
-    await f.manager.configureFeature(
-      f.bot,
-      '10',
-      'logging',
-      { channelId: '99' },
-      true,
-    );
+    await enableLogging(f, '10');
     await f.manager.configureFeature(
       f.bot,
       '10',
@@ -277,7 +255,7 @@ test('a throwing handler leaves other features and connection functional', async
             },
           ],
         },
-        features[1],
+        features.find((f) => f.id === 'autorole')!,
       ],
     );
     await engine.dispatch('guildMemberAdd', f.member(0));
@@ -327,7 +305,7 @@ test('slash command lifecycle only creates and deletes owned commands', async ()
     client as unknown as Client,
     [
       {
-        ...features[1],
+        ...features.find((f) => f.id === 'autorole')!,
         slashCommands: [
           { name: 'greet', description: 'Greet', async handle() {} },
         ],
@@ -353,4 +331,100 @@ test('slash command lifecycle only creates and deletes owned commands', async ()
     engine.close();
     f.close();
   }
+});
+
+test('master toggles suspend events and preserve the exact individual mix and config', async () => {
+  const f = await setup();
+  try {
+    await enableLogging(f, '10');
+    await f.manager.configureFeature(
+      f.bot,
+      '10',
+      'logging.memberJoined',
+      undefined,
+      false,
+    );
+    await f.manager.configureFeature(
+      f.bot,
+      '10',
+      'logging.roles',
+      undefined,
+      false,
+    );
+    const before = f.store.featureInstances(f.bot.id, '10');
+    await f.engine.dispatch('messageDelete', f.message(0));
+    assert.equal(f.sent.length, 1);
+    await f.manager.configureModule(f.bot, '10', 'logging', undefined, false);
+    await f.engine.dispatch('messageDelete', f.message(0));
+    assert.equal(f.sent.length, 1);
+    const suspended = f.manager
+      .featureStates(f.bot, '10')
+      .find((s) => s.featureId === 'logging.messageDeleted')!;
+    assert.equal(suspended.enabled, true);
+    assert.equal(suspended.effectiveEnabled, false);
+    assert.equal(suspended.state, 'suspended');
+    assert.deepEqual(f.store.featureInstances(f.bot.id, '10'), before);
+    await f.manager.configureModule(f.bot, '10', 'logging', undefined, true);
+    await f.engine.dispatch('messageDelete', f.message(0));
+    await f.engine.dispatch('guildMemberAdd', f.member(0));
+    assert.equal(f.sent.length, 2);
+    assert.deepEqual(f.store.featureInstances(f.bot.id, '10'), before);
+  } finally {
+    f.close();
+  }
+});
+
+test('moderation logging correlates departures without duplicate family events', async () => {
+  const f = await setup();
+  try {
+    await enableLogging(f, '10');
+    const member = f.member(0);
+    const { Collection, AuditLogEvent } = await import('discord.js');
+    const guild = {
+      ...member.guild,
+      fetchAuditLogs: async () => ({
+        entries: new Collection([
+          [
+            'event',
+            {
+              targetId: member.id,
+              action: AuditLogEvent.MemberKick,
+              createdTimestamp: Date.now(),
+              executorId: '77',
+            },
+          ],
+        ]),
+      }),
+    };
+    await f.engine.dispatch('guildMemberRemove', { ...member, guild });
+    assert.equal(f.sent.length, 1);
+    assert.match(JSON.stringify(f.sent[0]), /Member kicked/);
+    await f.manager.configureFeature(
+      f.bot,
+      '10',
+      'logging.memberModerated',
+      undefined,
+      false,
+    );
+    await f.engine.dispatch('guildMemberRemove', { ...member, guild });
+    assert.equal(f.sent.length, 2);
+    assert.match(JSON.stringify(f.sent[1]), /guildMemberRemove/);
+  } finally {
+    f.close();
+  }
+});
+
+test('registry fields have human presentation metadata and modules are nonempty', async () => {
+  const { modules } = await import('../src/features/registry.js');
+  for (const manifest of [...modules, ...features]) {
+    assert.ok(manifest.label && manifest.description);
+    assert.deepEqual(
+      Object.keys(manifest.fields).sort(),
+      Object.keys(manifest.configSchema.shape).sort(),
+    );
+    for (const field of Object.values(manifest.fields))
+      assert.ok(field.label && field.help && field.type);
+  }
+  for (const module of modules)
+    assert.ok(features.some((f) => f.module === module.id));
 });

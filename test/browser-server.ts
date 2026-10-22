@@ -3,7 +3,7 @@ import { mountAdmin } from '../src/web/admin.js';
 import { mountMcp } from '../src/mcp/http.js';
 import { fixture } from './helpers.js';
 
-const { store, manager, secrets } = await fixture();
+const { store, manager, secrets } = await fixture(true);
 for (const bot of store.bots()) manager.remove(bot.slug);
 const app = express();
 app.use(express.json());

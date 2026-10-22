@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Discord event tuples have different payload shapes; the registry is the dynamic dispatch boundary. */
 import { z } from 'zod';
 import { AuditLogEvent } from 'discord.js';
-import type { Feature, FeatureContext } from './types.js';
+import type { Feature, FeatureContext, Module } from './types.js';
 import { snowflake } from './types.js';
-const families = [
+export const loggingFamilies = [
   'messageEdited',
   'messageDeleted',
   'memberJoined',
@@ -32,6 +32,7 @@ async function log(
   ctx: FeatureContext,
   event: string,
   family: string,
+  activeFamily: string,
   before: any,
   after?: any,
 ) {
@@ -53,7 +54,7 @@ async function log(
   let title = event;
   if (
     event === 'guildMemberRemove' &&
-    (ctx.config.families as string[]).includes('memberModerated')
+    ctx.enabledFeatures.includes('logging.memberModerated')
   ) {
     try {
       const logs = await ctx.guild.fetchAuditLogs({ limit: 5 });
@@ -77,7 +78,7 @@ async function log(
       /* Audit permissions are optional; retain the departure event. */
     }
   }
-  if (!(ctx.config.families as string[]).includes(family)) return;
+  if (family !== activeFamily) return;
   const auditTypes: Record<string, AuditLogEvent> = {
     guildBanAdd: AuditLogEvent.MemberBanAdd,
     guildBanRemove: AuditLogEvent.MemberBanRemove,
@@ -157,6 +158,7 @@ async function log(
   const channel = await ctx.guild.channels.fetch(String(ctx.config.channelId));
   if (!channel?.isTextBased() || !('send' in channel))
     throw new Error('Log channel unavailable');
+  if (!ctx.active()) return;
   await channel.send({
     embeds: [
       { title, fields, timestamp: new Date().toISOString(), color: 0x8b7cf8 },
@@ -164,27 +166,90 @@ async function log(
     allowedMentions: { parse: [] },
   });
 }
-export const logging: Feature = {
+export const loggingModule: Module = {
   id: 'logging',
-  name: 'Server logging',
+  label: 'Logging',
   description: 'Log message, member, role, and channel changes.',
   configSchema: z.object({
     channelId: snowflake,
-    families: z.array(z.enum(families)).default([...families]),
     ignoreBots: z.boolean().default(true),
     ignoredChannelIds: z.array(snowflake).default([]),
     includeContent: z.boolean().default(true),
   }),
-  requiredIntents: [
-    'Guilds',
-    'GuildMessages',
-    'GuildMembers',
-    'GuildModeration',
-    'MessageContent',
-  ],
-  events: definitions.map(([name, family, intent]) => ({
-    name,
-    intents: [intent],
-    handle: (ctx, before, after) => log(ctx, name, family, before, after),
-  })),
+  fields: {
+    channelId: {
+      type: 'channel',
+      label: 'Log channel',
+      help: 'Send server activity to this channel.',
+    },
+    ignoreBots: {
+      type: 'toggle',
+      label: 'Ignore bots',
+      help: 'Exclude activity from other bots.',
+    },
+    ignoredChannelIds: {
+      type: 'channels',
+      label: 'Ignored channels',
+      help: 'Do not log activity from these channels.',
+    },
+    includeContent: {
+      type: 'toggle',
+      label: 'Include message content',
+      help: 'Requires the Message Content intent and cached messages.',
+    },
+  },
 };
+const labels = [
+  'Message edits',
+  'Message deletes',
+  'Member joins',
+  'Member leaves',
+  'Member moderation',
+  'Role changes',
+  'Channel changes',
+];
+export const loggingFeatures: Feature[] = loggingFamilies.map(
+  (family, index) => ({
+    id: `logging.${family}`,
+    module: 'logging',
+    name: labels[index],
+    label: labels[index],
+    description: [
+      'Record edited messages.',
+      'Record deleted messages.',
+      'Record new members.',
+      'Record member departures.',
+      'Record kicks and bans.',
+      'Record role updates.',
+      'Record channel updates.',
+    ][index],
+    configSchema: z.object({}),
+    fields: {},
+    requiredIntents:
+      family === 'memberModerated'
+        ? ['GuildMembers', 'GuildModeration']
+        : [
+            ...new Set(
+              definitions.filter((d) => d[1] === family).map((d) => d[2]),
+            ),
+          ],
+    events: [
+      ...definitions.filter((d) => d[1] === family),
+      ...(family === 'memberModerated'
+        ? [['guildMemberRemove', 'memberModerated', 'GuildMembers'] as const]
+        : []),
+    ].map(([name, , intent]) => ({
+      name,
+      intents: [intent],
+      handle: (ctx, before, after) =>
+        log(
+          ctx,
+          name,
+          name === 'guildMemberRemove' ? 'memberLeft' : family,
+          family,
+          before,
+          after,
+        ),
+    })),
+  }),
+);

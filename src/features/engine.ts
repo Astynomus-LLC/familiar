@@ -47,11 +47,25 @@ export class FeatureEngine {
         ),
       );
   };
+  private module(instance: FeatureInstance) {
+    const feature = this.registry.find((f) => f.id === instance.featureId);
+    return this.store.moduleInstance(
+      instance.botId,
+      instance.guildId,
+      feature?.module ?? '',
+    );
+  }
   private context(instance: FeatureInstance, guild: Guild): FeatureContext {
+    const module = this.module(instance);
+
     return {
       client: this.client,
       guild,
-      config: instance.config,
+      config: { ...module.config, ...instance.config },
+      enabledFeatures: this.store
+        .featureInstances(instance.botId, instance.guildId)
+        .filter((i) => i.enabled && this.module(i).enabled)
+        .map((i) => i.featureId),
       intents: gatewaySettings.parse(this.bot).intents,
       logger: (message) =>
         console.error(
@@ -59,6 +73,9 @@ export class FeatureEngine {
         ),
       active: () =>
         !this.closed &&
+        this.module(instance).enabled &&
+        JSON.stringify(this.module(instance).config) ===
+          JSON.stringify(module.config) &&
         this.store
           .featureInstances(this.bot.id, guild.id)
           .some(
@@ -77,7 +94,7 @@ export class FeatureEngine {
     await Promise.all(
       this.store
         .featureInstances(this.bot.id, guild.id)
-        .filter((i) => i.enabled)
+        .filter((i) => i.enabled && this.module(i).enabled)
         .map(async (instance) => {
           const feature = this.registry.find(
             (f) => f.id === instance.featureId,
@@ -144,7 +161,7 @@ export class FeatureEngine {
         ) ?? {};
       const enabled = this.store
         .featureInstances(this.bot.id, guild.id)
-        .filter((i) => i.enabled);
+        .filter((i) => i.enabled && this.module(i).enabled);
       const desired = this.registry
         .filter((f) => enabled.some((i) => i.featureId === f.id))
         .flatMap((f) =>
