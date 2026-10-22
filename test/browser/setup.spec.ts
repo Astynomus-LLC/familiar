@@ -1,0 +1,122 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { test, expect } from '@playwright/test';
+
+test('setup wizard through scoped key and client configuration', async ({
+  page,
+  request,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const { code } = await (await request.get('/test/setup-code')).json();
+  await page.route('**/auth/login', async (route) => {
+    const response = await route.fetch({ maxRedirects: 0 });
+    const state = new URL(response.headers().location).searchParams.get(
+      'state',
+    );
+    await route.fulfill({
+      status: 302,
+      headers: {
+        location: `http://localhost:3210/auth/callback?code=mock&state=${state}`,
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByLabel('Setup code').fill(code);
+  await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await page.getByLabel('Application ID').fill('123');
+  await page.getByLabel('OAuth client secret').fill('mock-secret');
+  await page
+    .getByRole('button', { name: 'Save and sign in with Discord' })
+    .click();
+  await expect(
+    page.getByRole('heading', { name: 'Meet your first bot.' }),
+  ).toBeVisible();
+  await page.getByLabel('Bot slug').fill('hello-bot');
+  await page.getByLabel('Bot token', { exact: true }).fill('hello-token');
+  await page.getByRole('button', { name: 'Validate and add bot' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'A useful starting point.' }),
+  ).toBeVisible();
+  const categories = page.locator('form[data-form="categories"]');
+  await categories.getByLabel('moderation', { exact: true }).check();
+  await categories.getByRole('button', { name: 'Save categories' }).click();
+  await page.getByLabel('Label', { exact: true }).fill('Desktop agent');
+  await page.getByRole('button', { name: 'Generate key' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Your agent’s key is ready' }),
+  ).toBeVisible();
+  await expect(page.locator('pre').last()).toContainText(
+    'http://localhost:3210/mcp',
+  );
+  const secret = (await page.locator('pre').first().textContent())!;
+  await page.getByRole('button', { name: 'I’ve saved it' }).click();
+  await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Everything, at a glance.' }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: '/tmp/familiar-dashboard.png',
+    fullPage: true,
+  });
+  await page.getByRole('link', { name: 'Bots', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'hello', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel('moderation', { exact: true })).toBeChecked();
+  const client = new Client({ name: 'browser-agent', version: '1' });
+  const transport = new StreamableHTTPClientTransport(
+    new URL('http://localhost:3210/mcp'),
+    { requestInit: { headers: { Authorization: `Bearer ${secret}` } } },
+  );
+  try {
+    await client.connect(transport);
+    expect(
+      (await client.listTools()).tools.some(
+        (tool) => tool.name === 'moderation_ban',
+      ),
+    ).toBe(true);
+    let notified = false;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      notified = true;
+    });
+    await page.getByLabel('moderation', { exact: true }).uncheck();
+    await page.getByRole('button', { name: 'Save categories' }).click();
+    await expect.poll(() => notified).toBe(true);
+    expect(
+      (await client.listTools()).tools.some(
+        (tool) => tool.name === 'moderation_ban',
+      ),
+    ).toBe(false);
+    const added = await page.request.post('/api/admin/bots', {
+      headers: { Origin: 'http://localhost:3210' },
+      data: { slug: 'other', token: 'other-token', categories: ['messages'] },
+    });
+    expect(added.ok()).toBe(true);
+    const listed = await client.callTool({ name: 'list_bots', arguments: {} });
+    expect(JSON.stringify(listed)).not.toContain('other');
+    const hidden = await client.callTool({
+      name: 'api_request',
+      arguments: { bot: 'other', method: 'GET', path: '/users/@me' },
+    });
+    expect(hidden.isError).toBe(true);
+    expect(JSON.stringify(hidden)).toContain('Bot not found.');
+  } finally {
+    await client.close();
+  }
+
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await page.getByLabel('Server-wide read-only mode').check();
+  await page.getByRole('button', { name: 'Save settings' }).click();
+  await expect(page.getByLabel('Server-wide read-only mode')).toBeChecked();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('link', { name: 'Keys', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'API keys' })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  expect(errors).toEqual([]);
+});
