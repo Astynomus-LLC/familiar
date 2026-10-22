@@ -89,7 +89,7 @@ function allowed(i: any, config: any, name: string): boolean {
     ),
   );
 }
-async function notify(
+export async function notify(
   ctx: FeatureContext,
   entry: ModCase,
   user: any,

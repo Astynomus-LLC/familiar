@@ -3,6 +3,7 @@ import type { Bot } from '../storage/store.js';
 import type { BotManager, Method } from '../bots/manager.js';
 
 export interface ToolContext {
+  actorLabel: string;
   bot: Bot;
   bots: Bot[];
   manager: BotManager;

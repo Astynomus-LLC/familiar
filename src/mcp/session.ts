@@ -189,6 +189,7 @@ export class Session {
       const result = await tool.execute(
         {
           bot,
+          actorLabel: keyLabel,
           bots: this.bots(),
           manager: this.manager,
           setActiveBot: (slug) => this.setActive(slug),

@@ -1,5 +1,6 @@
 import type { ModAction, ModCase } from '../storage/cases.js';
-import { publishModeration } from '../features/moderation-service.js';
+import { escalate, moderationModule, notify } from '../features/moderation.js';
+import { duration, publishModeration } from '../features/moderation-service.js';
 import { z } from 'zod';
 import { FeatureEngine } from '../features/engine.js';
 import { features, modules } from '../features/registry.js';
@@ -438,6 +439,80 @@ export class BotManager {
     }
   }
 
+  async warnMember(
+    bot: Bot,
+    guildId: string,
+    memberId: string,
+    reason: string,
+    label: string,
+  ) {
+    await this.resolveGuilds(bot, guildId);
+    const shared = this.store.moduleInstance(bot.id, guildId, 'moderation');
+    const client = this.connections.get(bot.slug)?.client;
+    if (shared.enabled && !client)
+      throw new Error('Moderation requires a connected Discord client.');
+    const guild = shared.enabled ? await client!.guilds.fetch(guildId) : null;
+    const member = guild ? await guild.members.fetch(memberId) : null;
+    const config = moderationModule.configSchema.parse(shared.config);
+    if (guild && member) {
+      const me = guild.members.me ?? (await guild.members.fetchMe());
+      if (!me.permissions.has(PermissionFlagsBits.ModerateMembers))
+        throw new Error(
+          'The bot is missing the required moderation permission.',
+        );
+      if (
+        member.id === guild.ownerId ||
+        me.roles.highest.comparePositionTo(member.roles.highest) <= 0
+      )
+        throw new Error(
+          'The bot cannot moderate this member because of role hierarchy.',
+        );
+    }
+    const entry = this.store.createCase({
+      bot_id: bot.id,
+      guild_id: guildId,
+      user_id: memberId,
+      actor: `agent:${label}`,
+      action: 'warn',
+      reason,
+    });
+    const count = this.store.activeWarnCount(guildId, memberId);
+    if (!shared.enabled) {
+      await this.publishCase(bot, entry);
+      return {
+        case: entry,
+        message:
+          'Warning recorded. Moderation is disabled in this server; no DM or escalation processing occurred.',
+      };
+    }
+    const ctx = {
+      store: this.store,
+      bot,
+      client: client!,
+      guild: guild!,
+      config,
+      enabledFeatures: [],
+      intents: gatewaySettings.parse(bot).intents,
+      active: () =>
+        this.store.moduleInstance(bot.id, guildId, 'moderation').enabled,
+      logger: (message: string) =>
+        this.store.audit({
+          timestamp: new Date().toISOString(),
+          key: `agent:${label}`,
+          bot,
+          tool: 'warn_member',
+          target: `${guildId}:${memberId}`,
+          result: message,
+        }),
+    };
+    await notify(ctx, entry, member!.user, config);
+    await escalate(ctx, member, config, count);
+    return {
+      case: entry,
+      message: `Case #${entry.case_number}: warn recorded.`,
+    };
+  }
+
   async recordAgentModeration(
     bot: Bot,
     name: string,
@@ -445,6 +520,9 @@ export class BotManager {
     label: string,
   ) {
     const actions: Record<string, ModAction> = {
+      ban_member: 'ban',
+      kick_member: 'kick',
+      timeout_member: args.duration === null ? 'untimeout' : 'timeout',
       moderation_ban: 'ban',
       moderation_unban: 'unban',
       moderation_kick: 'kick',
@@ -455,14 +533,21 @@ export class BotManager {
     const entry = this.store.createCase({
       bot_id: bot.id,
       guild_id: String(args.guild_id),
-      user_id: String(args.user_id),
+      user_id: String(args.member ?? args.user_id),
       actor: `agent:${label}`,
       action,
       reason:
         typeof args.reason === 'string'
           ? args.reason
           : 'Agent moderation action',
-      expires_at: action === 'timeout' ? String(args.until) : null,
+      expires_at:
+        action === 'timeout'
+          ? name === 'timeout_member'
+            ? new Date(
+                Date.now() + duration(String(args.duration)),
+              ).toISOString()
+            : String(args.until)
+          : null,
     });
     await this.publishCase(bot, entry);
   }

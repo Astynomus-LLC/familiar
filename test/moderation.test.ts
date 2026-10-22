@@ -7,6 +7,7 @@ import { Store } from '../src/storage/store.js';
 import { FeatureEngine } from '../src/features/engine.js';
 import { moderationFeature } from '../src/features/moderation.js';
 import { fixture } from './helpers.js';
+import { moderation } from '../src/tools/categories/moderation.js';
 import { Session } from '../src/mcp/session.js';
 
 function setup(contentIntent = true) {
@@ -138,6 +139,7 @@ function setup(contentIntent = true) {
     calls,
     member,
     guild,
+    client,
     bot,
     enable,
     module,
@@ -378,14 +380,28 @@ test('agent tool ban records labeled case; MCP hides inaccessible bots and rejec
   const session = new Session(f.store, f.manager, key.id);
   const read = (result: any) => JSON.parse(result.content[0].text).result;
   try {
-    const args = { guild_id: '10', user_id: '42', reason: 'Agent reason' };
-    const pending = read(await session.call('moderation_ban', args));
-    const result = await session.call('moderation_ban', {
+    const args = {
+      guild_id: '10',
+      member: '42',
+      reason: 'Agent reason',
+      delete_messages: 60,
+    };
+    const pending = read(await session.call('ban_member', args));
+    const result = await session.call('ban_member', {
       ...args,
       confirmation: pending.code,
     });
     assert.ok(!result.isError);
     assert.equal(f.store.modCases('10')[0].actor, 'agent:Test agent');
+    assert.equal(f.store.modCases('10')[0].reason, 'Agent reason');
+    assert.ok(
+      f.calls.some(
+        (c) =>
+          c.method === 'PUT' &&
+          c.path === '/guilds/10/bans/42' &&
+          (c.body as any).delete_message_seconds === 60,
+      ),
+    );
     const logs = read(
       await session.call('get_modlogs', { guild: 'Server A', user: '42' }),
     );
@@ -445,5 +461,101 @@ test('case sequences are shared across bots in a guild and voids never reuse a n
     assert.equal(store.modCase('20', 2), undefined);
   } finally {
     store.close();
+  }
+});
+
+test('moderation member tools put member and reason before extras', () => {
+  for (const [name, extras] of Object.entries({
+    ban_member: ['delete_messages'],
+    kick_member: [],
+    timeout_member: ['duration'],
+    warn_member: [],
+  })) {
+    const tool = moderation.tools.find((tool) => tool.name === name)!;
+    assert.deepEqual(Object.keys(tool.schema.shape), [
+      'guild_id',
+      'member',
+      'reason',
+      ...extras,
+    ]);
+    assert.match(tool.description, /reason is recorded in the server modlog/);
+  }
+});
+
+test('agent warnings share notifications and escalations and respect disabled moderation', async () => {
+  for (const mode of [
+    'enabled',
+    'disabled',
+    'dm-disabled',
+    'dm-failed',
+  ] as const) {
+    const discord = setup();
+    discord.client.guilds.fetch = async () => discord.guild;
+    if (mode === 'dm-failed')
+      discord.member.user.send = async () => {
+        throw new Error('Closed DMs');
+      };
+    const f = await fixture(discord.client);
+    const bot = f.store.bots()[0];
+    f.store.saveBot({ ...bot, categories: ['moderation'] });
+    f.store.saveModuleInstances([
+      {
+        botId: bot.id,
+        guildId: '10',
+        moduleId: 'moderation',
+        enabled: mode !== 'disabled',
+        config: {
+          dmSubject: mode !== 'dm-disabled',
+          thresholds: [{ count: 1, action: 'timeout', duration: '1h' }],
+        },
+      },
+    ]);
+    const { key } = f.store.createKey({
+      label: 'Warn agent',
+      bots: [bot.slug],
+      readOnly: false,
+      categories: null,
+    });
+    const session = new Session(f.store, f.manager, key.id);
+    try {
+      const result = await session.call('warn_member', {
+        guild_id: '10',
+        member: '42',
+        reason: 'Agent warning',
+      });
+      assert.ok(!result.isError, JSON.stringify(result));
+      const entry = f.store.modCase('10', 1)!;
+      assert.equal(entry.actor, 'agent:Warn agent');
+      assert.equal(entry.reason, 'Agent warning');
+      assert.equal(entry.action, 'warn');
+      assert.equal(f.store.activeWarnCount('10', '42'), 1);
+      if (mode === 'disabled') {
+        assert.equal(f.store.modCases('10').length, 1);
+        assert.ok(!discord.calls.some((c) => ['dm', 'timeout'].includes(c[0])));
+        assert.match(
+          result.content[0].text,
+          /Moderation is disabled.*no DM or escalation/,
+        );
+      } else {
+        assert.equal(f.store.modCase('10', 2)?.actor, 'system:warn-escalation');
+        assert.ok(
+          discord.calls.some((c) => c[0] === 'timeout' && c[1] === 3600000),
+        );
+        if (mode === 'enabled')
+          assert.ok(
+            discord.calls.some(
+              (c) =>
+                c[0] === 'dm' &&
+                c[1].content === 'Server A: warn — Agent warning',
+            ),
+          );
+        else assert.ok(!discord.calls.some((c) => c[0] === 'dm'));
+      }
+    } finally {
+      session.close();
+      f.manager.close();
+      f.store.close();
+      discord.close();
+    }
   }
 });
